@@ -1,0 +1,18 @@
+# Configuration
+/config.yaml
+
+# Build artifacts
+/readeckobo
+/coverage.out
+/coverage.html
+
+# Vendored dependencies
+/vendor
+
+# Web archive
+/web/archive
+
+# Gemini CLI state
+/.gemini/
+
+PROJECT.md
