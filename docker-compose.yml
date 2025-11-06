@@ -1,0 +1,9 @@
+services:
+  readeckobo:
+    build: .
+    container_name: readeckobo
+    user: "1000:1000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "8080:8080"
