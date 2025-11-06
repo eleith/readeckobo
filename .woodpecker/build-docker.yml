@@ -1,0 +1,73 @@
+workspace:
+  base: /workspace
+  path: app
+
+when:
+  - event: [push, tag]
+    branch: main
+    path:
+      include:
+        - "**/*.go"
+        - "**/*.gohtml"
+        - ".woodpecker/build-docker.yml"
+        - "Dockerfile"
+      exclude:
+        - "**/*.md"
+      on_empty: true
+
+steps:
+  vendor:
+    image: golang:1.24.5-alpine
+    commands:
+      - go mod vendor
+  lint:
+    image: golang:1.24.5-alpine
+    commands:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.3.0
+      - golangci-lint run -v
+  test:
+    image: golang:1.24.5-alpine
+    commands:
+      - ./scripts/check-coverage.sh 60
+  build-docker:
+    image: woodpeckerci/plugin-docker-buildx:6.0.1
+    settings:
+      repo: git.eleith.com/eleith.private/readeckobo
+      username: eleith
+      dockerfile: Dockerfile
+      registry: https://git.eleith.com
+      auto_tag: true
+      password:
+        from_secret: gitea_docker_registry
+  notify-success:
+    image: deblan/woodpecker-email:3.2.0
+    settings:
+      dsn:
+        from_secret: woodpecker_email_dsn
+      from:
+        address:
+          from_secret: woodpecker_email_from_address
+        name:
+          from_secret: woodpecker_email_from_name
+      recipients:
+        from_secret: woodpecker_email_recipient
+      level: success
+      recipients_only: true
+    when:
+      - status: [success]
+  notify-failure:
+    image: deblan/woodpecker-email:3.2.0
+    settings:
+      dsn:
+        from_secret: woodpecker_email_dsn
+      from:
+        address:
+          from_secret: woodpecker_email_from_address
+        name:
+          from_secret: woodpecker_email_from_name
+      recipients:
+        from_secret: woodpecker_email_recipient
+      level: failure
+      recipients_only: true
+    when:
+      - status: [failure]
