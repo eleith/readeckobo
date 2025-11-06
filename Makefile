@@ -6,6 +6,12 @@ build:
 test:
 	go test ./...
 
+test-coverage:
+	./scripts/check-coverage.sh 60
+
+test-coverage-full:
+	./scripts/check-coverage.sh --mode=functions 60
+
 # Run linter
 lint:
 	golangci-lint run
