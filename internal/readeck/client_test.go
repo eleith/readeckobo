@@ -84,7 +84,7 @@ func TestGetBookmarks(t *testing.T) {
 	client, _ := NewClient(server.URL, "test-token")
 	ctx := context.Background()
 
-	bookmarks, totalPages, err := client.GetBookmarks(ctx, "example.com", 1)
+	bookmarks, totalPages, err := client.GetBookmarks(ctx, "example.com", 1, nil)
 	if err != nil {
 		t.Fatalf("GetBookmarks failed: %v", err)
 	}
@@ -218,5 +218,46 @@ func TestCreateBookmark(t *testing.T) {
 	err := client.CreateBookmark(ctx, "http://example.com/new")
 	if err != nil {
 		t.Fatalf("CreateBookmark failed: %v", err)
+	}
+}
+
+func TestGetBookmarksWithIsArchived(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/bookmarks" {
+			t.Errorf("Expected to request '/api/bookmarks', got '%s'", r.URL.Path)
+		}
+		if r.URL.Query().Get("site") != "example.com" {
+			t.Errorf("Expected site query parameter 'example.com', got '%s'", r.URL.Query().Get("site"))
+		}
+		if r.URL.Query().Get("page") != "1" {
+			t.Errorf("Expected page query parameter '1', got '%s'", r.URL.Query().Get("page"))
+		}
+		if r.URL.Query().Get("is_archived") != "false" {
+			t.Errorf("Expected is_archived query parameter 'false', got '%s'", r.URL.Query().Get("is_archived"))
+		}
+
+		mockResponse := []Bookmark{
+			{ID: "b1", Title: "Test Bookmark"},
+		}
+		w.Header().Set("Total-Pages", "1")
+		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+			t.Fatalf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(server.URL, "test-token")
+	ctx := context.Background()
+
+	isArchived := false
+	bookmarks, totalPages, err := client.GetBookmarks(ctx, "example.com", 1, &isArchived)
+	if err != nil {
+		t.Fatalf("GetBookmarks failed: %v", err)
+	}
+	if len(bookmarks) != 1 || bookmarks[0].ID != "b1" {
+		t.Errorf("Expected 1 bookmark with ID 'b1', got %+v", bookmarks)
+	}
+	if totalPages != 1 {
+		t.Errorf("Expected totalPages to be 1, got %d", totalPages)
 	}
 }

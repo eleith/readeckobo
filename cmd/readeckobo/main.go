@@ -18,7 +18,7 @@ func main() {
 
 	decryptedToken, err := crypto.DecryptAESECB(cfg.Readeck.AccessToken, cfg.Kobo.Serial)
 	if err != nil {
-		log.Fatalf("Error decrypting Readeck access token: %v", err)
+		log.Fatalf("Error decrypting Readeck access token. This usually means the token in config.yaml is not correctly encrypted with your Kobo serial, or the serial itself is wrong. Please re-encrypt your Readeck access token using the `bin/generate-access-token` script with the correct Kobo serial. Original error: %v", err)
 	}
 
 	// Create Readeck API client

@@ -87,7 +87,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		log.Printf("Error reading /api/kobo/get request body: %v", err)
+		log.Printf("Error reading /api/kobo/get request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore the body for subsequent reads
@@ -95,7 +95,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	var req GetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding /api/kobo/get request: %v, body: %s", err, string(bodyBytes))
+		log.Printf("Error decoding /api/kobo/get request: %v, body: %s, URL: %s, Params: %v", err, string(bodyBytes), r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -106,12 +106,13 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	bsyncs, err := a.ReadeckClient.GetBookmarksSync(ctx, req.Since)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get bookmark syncs: %v", err), http.StatusInternalServerError)
-		log.Printf("Error getting bookmark syncs: %v", err)
+		log.Printf("Error getting bookmark syncs for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
 	resultList := make(map[string]any)
 	processedCount := 0
+	totalBookmarks := len(bsyncs)
 
 	for i, bsync := range bsyncs {
 		if i < offset {
@@ -129,12 +130,17 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		} else {
 			bookmark, err := a.ReadeckClient.GetBookmarkDetails(ctx, bsync.ID)
 			if err != nil {
-				log.Printf("Error getting bookmark details for ID %s: %v", bsync.ID, err)
+				log.Printf("Error getting bookmark details for ID %s in /api/kobo/get: %v, URL: %s, Params: %v", bsync.ID, err, r.URL.Path, r.URL.Query())
 				continue
 			}
 
 			if bookmark == nil {
-				log.Printf("Bookmark details for ID %s not found", bsync.ID)
+				log.Printf("Bookmark details for ID %s not found in /api/kobo/get, URL: %s, Params: %v", bsync.ID, r.URL.Path, r.URL.Query())
+				continue
+			}
+
+			if bookmark.IsArchived {
+				totalBookmarks--
 				continue
 			}
 
@@ -193,15 +199,14 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	resp := KoboGetResponse{
 		Status: 1,
 		List:   resultList,
-		Total:  len(bsyncs),
+		Total:  totalBookmarks,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("Error encoding response: %v", err)
-	}
-}
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				log.Printf("Error encoding response for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			}}
 
 // DownloadRequest represents the incoming request for /api/kobo/download
 type DownloadRequest struct {
@@ -222,21 +227,21 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
-		log.Printf("Error parsing form for /api/kobo/download: %v", err)
+		log.Printf("Error parsing form for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
 	reqURLStr := r.FormValue("url")
 	if reqURLStr == "" {
 		http.Error(w, "Missing 'url' parameter", http.StatusBadRequest)
-		log.Printf("Error: Missing 'url' parameter in /api/kobo/download request")
+		log.Printf("Error: Missing 'url' parameter in /api/kobo/download request, URL: %s, Params: %v", r.URL.Path, r.URL.Query())
 		return
 	}
 
 	parsedURL, err := url.Parse(reqURLStr)
 	if err != nil {
 		http.Error(w, "Invalid 'url' parameter", http.StatusBadRequest)
-		log.Printf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s", err, reqURLStr)
+		log.Printf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s, URL: %s, Params: %v", err, reqURLStr, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -249,9 +254,10 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 		totalPages := 1 // Initialize to 1 to ensure at least one page is fetched
 
 		for currentPage <= totalPages {
-			bookmarks, tp, err := a.ReadeckClient.GetBookmarks(ctx, site, currentPage)
+			isArchived := false
+			bookmarks, tp, err := a.ReadeckClient.GetBookmarks(ctx, site, currentPage, &isArchived)
 			if err != nil {
-				log.Printf("Error searching Readeck bookmarks for site %s, page %d: %v", site, currentPage, err)
+				log.Printf("Error searching Readeck bookmarks for site %s, page %d in /api/kobo/download: %v, URL: %s, Params: %v", site, currentPage, err, r.URL.Path, r.URL.Query())
 				break // Break from inner loop, try next site
 			}
 			totalPages = tp // Update totalPages from the response header
@@ -280,14 +286,14 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	articleHTML, err := a.ReadeckClient.GetBookmarkArticle(ctx, bookmarkFound.ID)
 	if err != nil {
 		http.Error(w, "Failed to fetch article content", http.StatusInternalServerError)
-		log.Printf("Error fetching article content for bookmark %s: %v", bookmarkFound.ID, err)
+		log.Printf("Error fetching article content for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
 	doc, err := html.Parse(strings.NewReader(articleHTML))
 	if err != nil {
 		http.Error(w, "Failed to parse article HTML", http.StatusInternalServerError)
-		log.Printf("Error parsing article HTML for bookmark %s: %v", bookmarkFound.ID, err)
+		log.Printf("Error parsing article HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -326,7 +332,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		http.Error(w, "Failed to render modified HTML", http.StatusInternalServerError)
-		log.Printf("Error rendering modified HTML for bookmark %s: %v", bookmarkFound.ID, err)
+		log.Printf("Error rendering modified HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -337,7 +343,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding response: %v", err)
+		log.Printf("Error encoding response for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 	}
 }
 
@@ -398,7 +404,7 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 	var req SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding /api/kobo/send request: %v", err)
+		log.Printf("Error decoding /api/kobo/send request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -441,7 +447,7 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
-			log.Printf("Error processing action '%s': %v", action, err)
+			log.Printf("Error processing action '%s' in /api/kobo/send: %v, URL: %s, Params: %v", action, err, r.URL.Path, r.URL.Query())
 			actionResults[i] = false
 			allSucceeded = false
 		} else {
@@ -455,10 +461,9 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding response: %v", err)
-	}
-}
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				log.Printf("Error encoding response for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			}}
 
 // HandleConvertImage handles the /api/convert-image endpoint.
 func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
@@ -475,26 +480,26 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Get(imageURL)
 	if err != nil {
-		log.Printf("Failed to fetch image %s: %v", imageURL, err)
-		a.returnPlaceholderImage(w, "Image fetch failed")
+		log.Printf("Failed to fetch image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.returnPlaceholderImage(w, r, "Image fetch failed")
 		return
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body: %v", err)
+			log.Printf("Error closing response body for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to fetch image %s: status %d", imageURL, resp.StatusCode)
-		a.returnPlaceholderImage(w, "Image not found")
+		log.Printf("Failed to fetch image %s in /api/convert-image: status %d, URL: %s, Params: %v", imageURL, resp.StatusCode, r.URL.Path, r.URL.Query())
+		a.returnPlaceholderImage(w, r, "Image not found")
 		return
 	}
 
 	img, _, err := image.Decode(resp.Body)
 	if err != nil {
-		log.Printf("Failed to decode image %s: %v", imageURL, err)
-		a.returnPlaceholderImage(w, "Image decoding failed")
+		log.Printf("Failed to decode image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.returnPlaceholderImage(w, r, "Image decoding failed")
 		return
 	}
 
@@ -504,12 +509,11 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	if err := jpeg.Encode(w, rgbImg, &jpeg.Options{Quality: 85}); err != nil {
-		log.Printf("Failed to encode JPEG for image %s: %v", imageURL, err)
-	}
-}
+			if err := jpeg.Encode(w, rgbImg, &jpeg.Options{Quality: 85}); err != nil {
+				log.Printf("Failed to encode JPEG for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+			}}
 
-func (a *App) returnPlaceholderImage(w http.ResponseWriter, message string) {
+func (a *App) returnPlaceholderImage(w http.ResponseWriter, r *http.Request, message string) {
 	width, height := 800, 600
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
@@ -526,7 +530,6 @@ func (a *App) returnPlaceholderImage(w http.ResponseWriter, message string) {
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-control", "public, max-age=300")
-	if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
-		log.Printf("Error encoding placeholder image: %v", err)
-	}
-}
+			if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
+				log.Printf("Error encoding placeholder image: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			}}
