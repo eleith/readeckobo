@@ -9,9 +9,11 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,9 +62,9 @@ type GetRequest struct {
 	AccessToken string     `json:"access_token"`
 	ConsumerKey string     `json:"consumer_key"`
 	ContentType string     `json:"contentType"`
-	Count       int        `json:"count"`
+	Count       string     `json:"count"`
 	DetailType  string     `json:"detailType"`
-	Offset      int        `json:"offset"`
+	Offset      string     `json:"offset"`
 	State       string     `json:"state"`
 	Total       string     `json:"total"`
 	Since       *time.Time `json:"since"`
@@ -82,12 +84,23 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		log.Printf("Error reading /api/kobo/get request body: %v", err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore the body for subsequent reads
+
 	var req GetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding /api/kobo/get request: %v", err)
+		log.Printf("Error decoding /api/kobo/get request: %v, body: %s", err, string(bodyBytes))
 		return
 	}
+
+	count, _ := strconv.Atoi(req.Count)
+	offset, _ := strconv.Atoi(req.Offset)
 
 	ctx := r.Context()
 	bsyncs, err := a.ReadeckClient.GetBookmarksSync(ctx, req.Since)
@@ -101,10 +114,10 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	processedCount := 0
 
 	for i, bsync := range bsyncs {
-		if i < req.Offset {
+		if i < offset {
 			continue
 		}
-		if processedCount >= req.Count && req.Count != 0 {
+		if processedCount >= count && count != 0 {
 			break
 		}
 
@@ -216,12 +229,14 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	reqURLStr := r.FormValue("url")
 	if reqURLStr == "" {
 		http.Error(w, "Missing 'url' parameter", http.StatusBadRequest)
+		log.Printf("Error: Missing 'url' parameter in /api/kobo/download request")
 		return
 	}
 
 	parsedURL, err := url.Parse(reqURLStr)
 	if err != nil {
 		http.Error(w, "Invalid 'url' parameter", http.StatusBadRequest)
+		log.Printf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s", err, reqURLStr)
 		return
 	}
 

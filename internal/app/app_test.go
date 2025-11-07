@@ -74,7 +74,7 @@ func TestHandleKoboGet(t *testing.T) {
 		WithReadeckClient(mockClient),
 	)
 
-	reqBody := GetRequest{Count: 1}
+	reqBody := GetRequest{Count: "1"}
 	body, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest(http.MethodPost, "/api/kobo/get", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
