@@ -111,13 +111,16 @@ func (c *Client) GetBookmarksSync(ctx context.Context, since *time.Time) ([]Book
 // GetBookmarks fetches bookmarks for a specific site.
 // This implementation does not handle pagination yet, it only fetches the first page.
 // Pagination will be added later if needed.
-func (c *Client) GetBookmarks(ctx context.Context, site string, page int) ([]Bookmark, int, error) {
+func (c *Client) GetBookmarks(ctx context.Context, site string, page int, isArchived *bool) ([]Bookmark, int, error) {
 	queryParams := url.Values{}
 	if site != "" {
 		queryParams.Add("site", site)
 	}
 	if page > 0 {
 		queryParams.Add("page", strconv.Itoa(page))
+	}
+	if isArchived != nil {
+		queryParams.Add("is_archived", strconv.FormatBool(*isArchived))
 	}
 
 	var bookmarks []Bookmark
