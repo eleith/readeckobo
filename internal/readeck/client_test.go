@@ -7,10 +7,14 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"readeckobo/internal/logger"
 )
 
+var testLogger = logger.New(logger.DEBUG)
+
 func TestNewClient(t *testing.T) {
-	client, err := NewClient("http://localhost:8080", "test-token")
+	client, err := NewClient("http://localhost:8080", "test-token", testLogger, nil)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -22,7 +26,7 @@ func TestNewClient(t *testing.T) {
 	}
 
 	// This should now correctly return an error due to stricter URL parsing
-	_, err = NewClient("invalid-url", "test-token")
+	_, err = NewClient("invalid-url", "test-token", testLogger, nil)
 	if err == nil {
 		t.Error("Expected error for invalid URL, got nil")
 	}
@@ -47,7 +51,7 @@ func TestGetBookmarksSync(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	syncEvents, err := client.GetBookmarksSync(ctx, nil)
@@ -67,23 +71,22 @@ func TestGetBookmarks(t *testing.T) {
 		if r.URL.Query().Get("site") != "example.com" {
 			t.Errorf("Expected site query parameter 'example.com', got '%s'", r.URL.Query().Get("site"))
 		}
-		if r.URL.Query().Get("page") != "1" {
-			t.Errorf("Expected page query parameter '1', got '%s'", r.URL.Query().Get("page"))
-		}
-
-		mockResponse := []Bookmark{
-			{ID: "b1", Title: "Test Bookmark"},
-		}
-		w.Header().Set("Total-Pages", "1")
-		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
-			t.Fatalf("Failed to encode response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	client, _ := NewClient(server.URL, "test-token")
-	ctx := context.Background()
-
+		        if r.URL.Query().Get("page") != "1" {
+		            t.Errorf("Expected page query parameter '1', got '%s'", r.URL.Query().Get("page"))
+		        }
+		
+		        mockResponse := []Bookmark{
+		            {ID: "b1", Title: "Test Bookmark"},
+		        }
+		        w.Header().Set("Total-Pages", "1")
+		        if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+		            t.Fatalf("Failed to encode response: %v", err)
+		        }
+		    }))
+		    defer server.Close()
+		
+		    client, _ := NewClient(server.URL, "test-token", testLogger, nil)
+		    ctx := context.Background()
 	bookmarks, totalPages, err := client.GetBookmarks(ctx, "example.com", 1, nil)
 	if err != nil {
 		t.Fatalf("GetBookmarks failed: %v", err)
@@ -109,7 +112,7 @@ func TestGetBookmarkDetails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	bookmark, err := client.GetBookmarkDetails(ctx, "b1")
@@ -133,7 +136,7 @@ func TestGetBookmarkArticle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	article, err := client.GetBookmarkArticle(ctx, "b1")
@@ -166,7 +169,7 @@ func TestUpdateBookmark(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	updates := map[string]interface{}{"is_archived": true}
@@ -182,7 +185,7 @@ func TestUpdateBookmarkNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	updates := map[string]interface{}{"is_archived": true}
@@ -208,12 +211,12 @@ func TestCreateBookmark(t *testing.T) {
 		if body["url"] != "http://example.com/new" {
 			t.Errorf("Expected URL 'http://example.com/new', got '%s'", body["url"])
 		}
-		w.WriteHeader(http.StatusCreated)
-	}))
-	defer server.Close()
-
-	client, _ := NewClient(server.URL, "test-token")
-	ctx := context.Background()
+		        w.WriteHeader(http.StatusCreated)
+			}))
+			defer server.Close()
+		
+			client, _ := NewClient(server.URL, "test-token", testLogger, nil)
+			ctx := context.Background()
 
 	err := client.CreateBookmark(ctx, "http://example.com/new")
 	if err != nil {
@@ -246,7 +249,7 @@ func TestGetBookmarksWithIsArchived(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "test-token")
+	client, _ := NewClient(server.URL, "test-token", testLogger, nil)
 	ctx := context.Background()
 
 	isArchived := false

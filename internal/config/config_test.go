@@ -18,14 +18,16 @@ func TestLoad(t *testing.T) {
 			name: "valid config",
 			config: map[string]any{
 				"readeck": map[string]any{
-					"host":        "https://readeck.example.com",
-					"access_token": "test-access-token",
+					"host": "https://readeck.example.com",
 				},
 				"server": map[string]any{
 					"port": 8080,
 				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
 				},
 			},
 			wantErr: false,
@@ -33,36 +35,20 @@ func TestLoad(t *testing.T) {
 		{
 			name: "invalid config missing readeck.host",
 			config: map[string]any{
-				"readeck": map[string]any{
-					"access_token": "test-access-token",
-				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
 				},
 			},
 			wantErr: true,
 		},
 		{
-			name: "invalid config missing readeck.access_token",
+			name: "invalid config missing users",
 			config: map[string]any{
 				"readeck": map[string]any{
 					"host": "https://readeck.example.com",
-				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid config missing kobo.serial",
-			config: map[string]any{
-				"readeck": map[string]any{
-					"host":        "https://readeck.example.com",
-					"access_token": "test-access-token",
-				},
-				"server": map[string]any{
-					"port": 8080,
 				},
 			},
 			wantErr: true,
@@ -71,14 +57,16 @@ func TestLoad(t *testing.T) {
 			name: "invalid server.port too high",
 			config: map[string]any{
 				"readeck": map[string]any{
-					"host":        "https://readeck.example.com",
-					"access_token": "test-access-token",
+					"host": "https://readeck.example.com",
 				},
 				"server": map[string]any{
 					"port": 65536,
 				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
 				},
 			},
 			wantErr: true,
@@ -87,14 +75,16 @@ func TestLoad(t *testing.T) {
 			name: "valid server.port",
 			config: map[string]any{
 				"readeck": map[string]any{
-					"host":        "https://readeck.example.com",
-					"access_token": "test-access-token",
+					"host": "https://readeck.example.com",
 				},
 				"server": map[string]any{
 					"port": 8080,
 				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
 				},
 			},
 			wantErr: false,
@@ -103,11 +93,13 @@ func TestLoad(t *testing.T) {
 			name: "invalid readeck.host format",
 			config: map[string]any{
 				"readeck": map[string]any{
-					"host":        "invalid-url",
-					"access_token": "test-access-token",
+					"host": "invalid-url",
 				},
-				"kobo": map[string]any{
-					"serial": "test-serial",
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
 				},
 			},
 			wantErr: true,

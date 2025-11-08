@@ -1,7 +1,8 @@
-readeck:
-  host: "https://your-readeck-instance.com"
-  access_token: "your-encrypted-readeck-access-token" # Encrypted with generate-access-token script
 server:
   port: 8080
-kobo:
-  serial: "your-kobo-serial-number"
+log_level: info
+readeck:
+  host: "https://your-readeck-instance.com"
+users:
+  - token: "a-very-secret-token-for-your-kobo"
+    readeck_access_token: "your-plain-text-readeck-access-token"

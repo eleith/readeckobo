@@ -11,19 +11,22 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+type User struct {
+	Token              string `koanf:"token" validate:"required"`
+	ReadeckAccessToken string `koanf:"readeck_access_token" validate:"required"`
+}
+
 type ConfigReadeck struct {
-	Host        string `koanf:"host" validate:"required,url"`
-	AccessToken string `koanf:"access_token" validate:"required"`
+	Host string `koanf:"host" validate:"required,url"`
 }
 
 type Config struct {
-	Readeck ConfigReadeck `koanf:"readeck"`
-	Server  struct {
+	Readeck  ConfigReadeck `koanf:"readeck"`
+	Server   struct {
 		Port int `koanf:"port" validate:"min=1,max=65535"`
 	} `koanf:"server"`
-	Kobo    struct {
-		Serial string `koanf:"serial" validate:"required"`
-	} `koanf:"kobo"`
+	Users    []User        `koanf:"users" validate:"required,min=1,dive"`
+	LogLevel string        `koanf:"log_level" validate:"oneof=error warn info debug"`
 }
 
 func (c *Config) Validate() error {
@@ -68,5 +71,6 @@ func Load(path string) (*Config, error) {
 func setDefaultValues(k *koanf.Koanf) error {
 	return k.Load(confmap.Provider(map[string]any{
 		"server.port": 8080,
+		"log_level":   "info",
 	}, "."), nil)
 }

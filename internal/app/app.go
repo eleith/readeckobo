@@ -10,8 +10,8 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
-	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,13 +22,23 @@ import (
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/net/html"
 	"readeckobo/internal/config"
+	"readeckobo/internal/logger"
 	"readeckobo/internal/readeck"
 )
 
 // App holds the application's core dependencies and configuration.
 type App struct {
 	Config        *config.Config
-	ReadeckClient readeck.ClientInterface // Use the interface
+	Logger        *logger.Logger
+	ImageHTTPClient *http.Client // New field for image fetching
+	ReadeckHTTPClient *http.Client // New field for Readeck API HTTP client
+}
+
+// WithImageHTTPClient sets the HTTP client for image fetching.
+func WithImageHTTPClient(client *http.Client) Option {
+	return func(a *App) {
+		a.ImageHTTPClient = client
+	}
 }
 
 // Option is a functional option for configuring the App.
@@ -50,10 +60,17 @@ func WithConfig(cfg *config.Config) Option {
 	}
 }
 
-// WithReadeckClient sets the Readeck API client.
-func WithReadeckClient(client readeck.ClientInterface) Option { // Accept the interface
+// WithLogger sets the application logger.
+func WithLogger(logger *logger.Logger) Option {
 	return func(a *App) {
-		a.ReadeckClient = client
+		a.Logger = logger
+	}
+}
+
+// WithReadeckHTTPClient sets the HTTP client for Readeck API calls.
+func WithReadeckHTTPClient(client *http.Client) Option {
+	return func(a *App) {
+		a.ReadeckHTTPClient = client
 	}
 }
 
@@ -77,137 +94,199 @@ type KoboGetResponse struct {
 	Total  int            `json:"total"`
 }
 
-// HandleKoboGet handles the /api/kobo/get endpoint.
+	// HandleKoboGet handles the /api/kobo/get endpoint.
 func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
+	// Read the body once at the beginning.
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		a.Logger.Errorf("Error reading /api/kobo/get request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+	// Immediately restore the body so it can be read again by the JSON decoder.
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// Log the incoming Kobo request details. The logger's Debugf method will handle the level check.
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/get:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		log.Printf("Error reading /api/kobo/get request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore the body for subsequent reads
-
 	var req GetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding /api/kobo/get request: %v, body: %s, URL: %s, Params: %v", err, string(bodyBytes), r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error decoding /api/kobo/get request: %v, body: %s, URL: %s, Params: %v", err, string(bodyBytes), r.URL.Path, r.URL.Query())
+		return
+	}
+
+	// Authenticate the request by looking up the provided token
+	readeckToken, err := a.getReadeckToken(req.AccessToken)
+	if err != nil {
+		http.Error(w, "Invalid access token", http.StatusUnauthorized)
+		a.Logger.Errorf("Error authenticating token for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+
+	readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+	if err != nil {
+		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
+		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
 	count, _ := strconv.Atoi(req.Count)
 	offset, _ := strconv.Atoi(req.Offset)
 
+	resultList := make(map[string]any) // Declare resultList here
+
 	ctx := r.Context()
-	bsyncs, err := a.ReadeckClient.GetBookmarksSync(ctx, req.Since)
+	bsyncs, err := readeckClient.GetBookmarksSync(ctx, req.Since) // Use the new client
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get bookmark syncs: %v", err), http.StatusInternalServerError)
-		log.Printf("Error getting bookmark syncs for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error getting bookmark syncs for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
+	a.Logger.Debugf("HandleKoboGet: GetBookmarksSync returned %d sync events.", len(bsyncs))
 
-	resultList := make(map[string]any)
-	processedCount := 0
-	totalBookmarks := len(bsyncs)
-
-	for i, bsync := range bsyncs {
-		if i < offset {
-			continue
-		}
-		if processedCount >= count && count != 0 {
-			break
-		}
-
+	// Filter out deleted bookmarks and collect IDs for fetching details
+	var candidateBookmarkIDs []string
+	for _, bsync := range bsyncs {
 		if bsync.Type == "delete" {
 			resultList[bsync.ID] = map[string]any{
 				"item_id": bsync.ID,
 				"status":  "2",
 			}
 		} else {
-			bookmark, err := a.ReadeckClient.GetBookmarkDetails(ctx, bsync.ID)
-			if err != nil {
-				log.Printf("Error getting bookmark details for ID %s in /api/kobo/get: %v, URL: %s, Params: %v", bsync.ID, err, r.URL.Path, r.URL.Query())
-				continue
-			}
-
-			if bookmark == nil {
-				log.Printf("Bookmark details for ID %s not found in /api/kobo/get, URL: %s, Params: %v", bsync.ID, r.URL.Path, r.URL.Query())
-				continue
-			}
-
-			if bookmark.IsArchived {
-				totalBookmarks--
-				continue
-			}
-
-			hasImage := "0"
-			image := map[string]any{"src": ""}
-			images := map[string]any{}
-			optional := map[string]any{}
-
-			if bookmark.Resources.Image != nil && bookmark.Resources.Image.Src != "" {
-				hasImage = "1"
-				image["src"] = bookmark.Resources.Image.Src
-				images["1"] = map[string]any{
-					"image_id": "1",
-					"item_id":  "1",
-					"src":      bookmark.Resources.Image.Src,
-				}
-				optional["top_image_url"] = bookmark.Resources.Image.Src
-			}
-
-			tags := make(map[string]any)
-			for _, label := range bookmark.Labels {
-				tags[label] = map[string]string{"item_id": bsync.ID, "tag": label}
-			}
-
-			resultList[bsync.ID] = map[string]any{
-				"authors":        map[string]any{},
-				"excerpt":        bookmark.Description,
-				"favorite":       "0",
-				"given_title":    bookmark.Title,
-				"given_url":      bookmark.URL,
-				"has_image":      hasImage,
-				"has_video":      "0",
-				"image":          image,
-				"images":         images,
-				"is_article":     "1",
-				"item_id":        bookmark.ID,
-				"resolved_id":    bookmark.ID,
-				"resolved_title": bookmark.Title,
-				"resolved_url":   bookmark.URL,
-				"status":         "0",
-				"tags":           tags,
-				"time_added":     bookmark.Created.Unix(),
-				"time_read":      0,
-				"time_updated":   bookmark.Updated.Unix(),
-				"videos":         []any{},
-				"word_count":     bookmark.WordCount,
-				"_optional":      optional,
-			}
-			for _, author := range bookmark.Authors {
-				resultList[bsync.ID].(map[string]any)["authors"].(map[string]any)[author] = map[string]string{"author_id": author, "name": author}
-			}
+			candidateBookmarkIDs = append(candidateBookmarkIDs, bsync.ID)
 		}
-		processedCount++
+	}
+	a.Logger.Debugf("HandleKoboGet: %d candidate bookmark IDs identified for batch fetching.", len(candidateBookmarkIDs))
+
+	// Fetch all candidate bookmark details in a single batch call
+	bookmarksDetailsMap, err := readeckClient.SyncBookmarksContent(ctx, candidateBookmarkIDs) // Use the new client
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get bookmark details in batch: %v", err), http.StatusInternalServerError)
+		a.Logger.Errorf("Error getting bookmark details in batch for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+
+	a.Logger.Debugf("SyncBookmarksContent returned %d bookmark details.", len(bookmarksDetailsMap))
+	if len(bookmarksDetailsMap) > 0 {
+		sampleIDs := make([]string, 0, 5)
+		for id := range bookmarksDetailsMap {
+			sampleIDs = append(sampleIDs, id)
+			if len(sampleIDs) == 5 { break }
+		}
+		a.Logger.Debugf("Sample IDs from batch response: %v", sampleIDs)
+	}
+
+	actualBookmarks := []map[string]any{} // To store processed, non-archived bookmarks in order
+	var totalNonArchivedBookmarks int
+
+	// Iterate through the original sync events to maintain order and apply filtering
+	for _, bsync := range bsyncs {
+		if bsync.Type == "delete" {
+			continue // Already handled, or not relevant for actualBookmarks
+		}
+
+		bookmark, found := bookmarksDetailsMap[bsync.ID]
+		if !found {
+			// a.Logger.Warnf("Bookmark details for ID %s not found in batch response for /api/kobo/get, URL: %s, Params: %v", bsync.ID, r.URL.Path, r.URL.Query())
+			continue
+		}
+
+		if bookmark == nil { // Should not happen if 'found' is true, but good for safety
+			a.Logger.Warnf("Bookmark details for ID %s were nil in batch response for /api/kobo/get, URL: %s, Params: %v", bsync.ID, r.URL.Path, r.URL.Query())
+			continue
+		}
+
+		// Count all non-archived bookmarks for the total field
+		if !bookmark.IsArchived {
+			totalNonArchivedBookmarks++
+		}
+
+		// Only add non-archived bookmarks to actualBookmarks for pagination
+		if bookmark.IsArchived {
+			continue
+		}
+
+		// Construct the bookmark entry for resultList
+		entry := make(map[string]any)
+		entry["authors"] = make(map[string]any)
+		for _, author := range bookmark.Authors {
+			entry["authors"].(map[string]any)[author] = map[string]string{"author_id": author, "name": author}
+		}
+		entry["excerpt"] = bookmark.Description
+		entry["favorite"] = "0"
+		entry["given_title"] = bookmark.Title
+		entry["given_url"] = bookmark.URL
+		entry["has_image"] = "0"
+		entry["has_video"] = "0"
+		entry["image"] = map[string]any{"src": ""}
+		entry["images"] = map[string]any{}
+		entry["is_article"] = "1"
+		entry["item_id"] = bookmark.ID
+		entry["resolved_id"] = bookmark.ID
+		entry["resolved_title"] = bookmark.Title
+		entry["resolved_url"] = bookmark.URL
+		entry["status"] = "0"
+		entry["tags"] = make(map[string]any)
+		for _, label := range bookmark.Labels {
+			entry["tags"].(map[string]any)[label] = map[string]string{"item_id": bsync.ID, "tag": label}
+		}
+		entry["time_added"] = bookmark.Created.Unix()
+		entry["time_read"] = 0
+		entry["time_updated"] = bookmark.Updated.Unix()
+		entry["videos"] = []any{}
+		entry["word_count"] = bookmark.WordCount
+		entry["_optional"] = make(map[string]any)
+
+		if bookmark.Resources.Image != nil && bookmark.Resources.Image.Src != "" {
+			entry["has_image"] = "1"
+			entry["image"].(map[string]any)["src"] = bookmark.Resources.Image.Src
+			entry["images"].(map[string]any)["1"] = map[string]any{
+				"image_id": "1",
+				"item_id":  "1",
+				"src":      bookmark.Resources.Image.Src,
+			}
+			entry["_optional"].(map[string]any)["top_image_url"] = bookmark.Resources.Image.Src
+		}
+		actualBookmarks = append(actualBookmarks, entry)
+	}
+
+	// Apply Kobo client's count and offset logic to the filtered actualBookmarks
+	startIndex := offset
+	endIndex := offset + count
+	if count == 0 { // If count is 0, return all
+		endIndex = len(actualBookmarks)
+	}
+
+	if startIndex > len(actualBookmarks) {
+		startIndex = len(actualBookmarks)
+	}
+	if endIndex > len(actualBookmarks) {
+		endIndex = len(actualBookmarks)
+	}
+
+	// Populate resultList with the paginated and filtered bookmarks
+	for _, bm := range actualBookmarks[startIndex:endIndex] {
+		resultList[bm["item_id"].(string)] = bm
 	}
 
 	resp := KoboGetResponse{
 		Status: 1,
 		List:   resultList,
-		Total:  totalBookmarks,
+		Total:  totalNonArchivedBookmarks, // Total number of non-archived bookmarks
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				log.Printf("Error encoding response for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
-			}}
-
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		a.Logger.Errorf("Error encoding response for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+	}
+}
 // DownloadRequest represents the incoming request for /api/kobo/download
 type DownloadRequest struct {
 	AccessToken string `json:"access_token"`
@@ -220,28 +299,68 @@ type DownloadRequest struct {
 
 // HandleKoboDownload handles the /api/kobo/download endpoint.
 func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
+	// Read the body once at the beginning.
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		a.Logger.Errorf("Error reading /api/kobo/download request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+	// Immediately restore the body so it can be read again by the JSON decoder or form parser.
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// Log the incoming Kobo request details. The logger's Debugf method will handle the level check.
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/download:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
-		log.Printf("Error parsing form for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+	var req DownloadRequest
+	// Use the restored body for decoding.
+	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
+		// If JSON decoding fails, try form parsing (Kobo devices might send form data for download)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid request body or form data", http.StatusBadRequest)
+			a.Logger.Errorf("Error decoding /api/kobo/download request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			return
+		}
+		req.AccessToken = r.FormValue("access_token")
+		req.ConsumerKey = r.FormValue("consumer_key")
+		req.Images, _ = strconv.Atoi(r.FormValue("images"))
+		req.Refresh, _ = strconv.Atoi(r.FormValue("refresh"))
+		req.Output = r.FormValue("output")
+		req.URL = r.FormValue("url")
+	}
+
+	// Authenticate the request by looking up the provided token
+	readeckToken, err := a.getReadeckToken(req.AccessToken)
+	if err != nil {
+		http.Error(w, "Invalid access token", http.StatusUnauthorized)
+		a.Logger.Errorf("Error authenticating token for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
-	reqURLStr := r.FormValue("url")
+	// Create a new Readeck client with the looked-up token for this request
+	readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+	if err != nil {
+		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
+		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+
+	reqURLStr := req.URL
 	if reqURLStr == "" {
 		http.Error(w, "Missing 'url' parameter", http.StatusBadRequest)
-		log.Printf("Error: Missing 'url' parameter in /api/kobo/download request, URL: %s, Params: %v", r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error: Missing 'url' parameter in /api/kobo/download request, URL: %s, Params: %v", r.URL.Path, r.URL.Query())
 		return
 	}
 
 	parsedURL, err := url.Parse(reqURLStr)
 	if err != nil {
 		http.Error(w, "Invalid 'url' parameter", http.StatusBadRequest)
-		log.Printf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s, URL: %s, Params: %v", err, reqURLStr, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s, URL: %s, Params: %v", err, reqURLStr, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -255,17 +374,24 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 		for currentPage <= totalPages {
 			isArchived := false
-			bookmarks, tp, err := a.ReadeckClient.GetBookmarks(ctx, site, currentPage, &isArchived)
+			bookmarks, tp, err := readeckClient.GetBookmarks(ctx, site, currentPage, &isArchived) // Use the new client
 			if err != nil {
-				log.Printf("Error searching Readeck bookmarks for site %s, page %d in /api/kobo/download: %v, URL: %s, Params: %v", site, currentPage, err, r.URL.Path, r.URL.Query())
+				a.Logger.Warnf("Error searching Readeck bookmarks for site %s, page %d in /api/kobo/download: %v, URL: %s, Params: %v", site, currentPage, err, r.URL.Path, r.URL.Query())
 				break // Break from inner loop, try next site
 			}
 			totalPages = tp // Update totalPages from the response header
 
 			for i := range bookmarks {
-				if bookmarks[i].URL != "" && bookmarks[i].URL == reqURLStr {
-					bookmarkFound = &bookmarks[i]
-					break // Found the bookmark, break from inner loop
+				if bookmarks[i].URL != "" {
+					match, err := compareURLs(bookmarks[i].URL, reqURLStr)
+					if err != nil {
+						a.Logger.Warnf("Error comparing URLs for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarks[i].ID, err, r.URL.Path, r.URL.Query())
+						continue
+					}
+					if match {
+						bookmarkFound = &bookmarks[i]
+						break // Found the bookmark, break from inner loop
+					}
 				}
 			}
 			if bookmarkFound != nil {
@@ -283,17 +409,17 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	articleHTML, err := a.ReadeckClient.GetBookmarkArticle(ctx, bookmarkFound.ID)
+	articleHTML, err := readeckClient.GetBookmarkArticle(ctx, bookmarkFound.ID) // Use the new client
 	if err != nil {
 		http.Error(w, "Failed to fetch article content", http.StatusInternalServerError)
-		log.Printf("Error fetching article content for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error fetching article content for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
 	doc, err := html.Parse(strings.NewReader(articleHTML))
 	if err != nil {
 		http.Error(w, "Failed to parse article HTML", http.StatusInternalServerError)
-		log.Printf("Error parsing article HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error parsing article HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -332,7 +458,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		http.Error(w, "Failed to render modified HTML", http.StatusInternalServerError)
-		log.Printf("Error rendering modified HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error rendering modified HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -343,7 +469,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding response for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error encoding response for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 	}
 }
 
@@ -396,15 +522,44 @@ type SendRequest struct {
 
 // HandleKoboSend handles the /api/kobo/send endpoint.
 func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
+	// Read the body once at the beginning.
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		a.Logger.Errorf("Error reading /api/kobo/send request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+	// Immediately restore the body so it can be read again by the JSON decoder.
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// Log the incoming Kobo request details. The logger's Debugf method will handle the level check.
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/send:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var req SendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Use the restored body for decoding.
+	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding /api/kobo/send request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error decoding /api/kobo/send request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		return
+	}
+	
+		// Authenticate the request by looking up the provided token
+		readeckToken, err := a.getReadeckToken(req.AccessToken)
+		if err != nil {
+			http.Error(w, "Invalid access token", http.StatusUnauthorized)
+			a.Logger.Errorf("Error authenticating token for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			return
+		}
+	
+			// Create a new Readeck client with the looked-up token for this request
+			readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+			if err != nil {		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
+		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -426,28 +581,28 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		switch action {
 		case "archive":
 			itemID, _ := actionMap["item_id"].(string)
-			err = a.ReadeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_archived": true})
+			err = readeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_archived": true}) // Use the new client
 		case "readd":
 			itemID, _ := actionMap["item_id"].(string)
-			err = a.ReadeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_archived": false})
+			err = readeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_archived": false}) // Use the new client
 		case "favorite":
 			itemID, _ := actionMap["item_id"].(string)
-			err = a.ReadeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_marked": true})
+			err = readeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_marked": true}) // Use the new client
 		case "unfavorite":
 			itemID, _ := actionMap["item_id"].(string)
-			err = a.ReadeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_marked": false})
+			err = readeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_marked": false}) // Use the new client
 		case "delete":
 			itemID, _ := actionMap["item_id"].(string)
-			err = a.ReadeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_deleted": true})
+			err = readeckClient.UpdateBookmark(ctx, itemID, map[string]any{"is_deleted": true}) // Use the new client
 		case "add":
 			url, _ := actionMap["url"].(string)
-			err = a.ReadeckClient.CreateBookmark(ctx, url)
+			err = readeckClient.CreateBookmark(ctx, url) // Use the new client
 		default:
 			err = fmt.Errorf("unknown action: %s", action)
 		}
 
 		if err != nil {
-			log.Printf("Error processing action '%s' in /api/kobo/send: %v, URL: %s, Params: %v", action, err, r.URL.Path, r.URL.Query())
+			a.Logger.Warnf("Error processing action '%s' in /api/kobo/send: %v, URL: %s, Params: %v", action, err, r.URL.Path, r.URL.Query())
 			actionResults[i] = false
 			allSucceeded = false
 		} else {
@@ -461,9 +616,10 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(response); err != nil {
-				log.Printf("Error encoding response for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
-			}}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		a.Logger.Errorf("Error encoding response for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+	}
+}
 
 // HandleConvertImage handles the /api/convert-image endpoint.
 func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
@@ -478,27 +634,31 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := http.Get(imageURL)
+	client := a.ImageHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second} // Default client with timeout
+	}
+	resp, err := client.Get(imageURL)
 	if err != nil {
-		log.Printf("Failed to fetch image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Failed to fetch image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
 		a.returnPlaceholderImage(w, r, "Image fetch failed")
 		return
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("Error closing response body for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+			a.Logger.Warnf("Error closing response body for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to fetch image %s in /api/convert-image: status %d, URL: %s, Params: %v", imageURL, resp.StatusCode, r.URL.Path, r.URL.Query())
+		a.Logger.Warnf("Failed to fetch image %s in /api/convert-image: status %d, URL: %s, Params: %v", imageURL, resp.StatusCode, r.URL.Path, r.URL.Query())
 		a.returnPlaceholderImage(w, r, "Image not found")
 		return
 	}
 
 	img, _, err := image.Decode(resp.Body)
 	if err != nil {
-		log.Printf("Failed to decode image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.Logger.Warnf("Failed to decode image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
 		a.returnPlaceholderImage(w, r, "Image decoding failed")
 		return
 	}
@@ -509,9 +669,10 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-			if err := jpeg.Encode(w, rgbImg, &jpeg.Options{Quality: 85}); err != nil {
-				log.Printf("Failed to encode JPEG for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
-			}}
+	if err := jpeg.Encode(w, rgbImg, &jpeg.Options{Quality: 85}); err != nil {
+		a.Logger.Errorf("Failed to encode JPEG for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+	}
+}
 
 func (a *App) returnPlaceholderImage(w http.ResponseWriter, r *http.Request, message string) {
 	width, height := 800, 600
@@ -530,6 +691,62 @@ func (a *App) returnPlaceholderImage(w http.ResponseWriter, r *http.Request, mes
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-control", "public, max-age=300")
-			if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
-				log.Printf("Error encoding placeholder image: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
-			}}
+	if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
+		a.Logger.Errorf("Error encoding placeholder image: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+	}
+}
+
+// compareURLs robustly compares two URLs by normalizing them and ignoring query parameters and fragments.
+func compareURLs(url1, url2 string) (bool, error) {
+	u1, err := url.Parse(strings.TrimSpace(url1))
+	if err != nil {
+		return false, err
+	}
+	u2, err := url.Parse(strings.TrimSpace(url2))
+	if err != nil {
+		return false, err
+	}
+
+	// Normalize by removing 'www.' from host
+	u1.Host = strings.TrimPrefix(u1.Host, "www.")
+	u2.Host = strings.TrimPrefix(u2.Host, "www.")
+
+	// Compare scheme, host, and path, but ignore query params and fragments
+	return u1.Scheme == u2.Scheme && u1.Host == u2.Host && u1.Path == u2.Path, nil
+}
+
+func (a *App) getReadeckToken(deviceToken string) (string, error) {
+	for _, user := range a.Config.Users {
+		if user.Token == deviceToken {
+			return user.ReadeckAccessToken, nil
+		}
+	}
+	return "", fmt.Errorf("unauthorized device token")
+}
+
+// HandleDumpAndForward handles the dump and forward endpoint.
+func (a *App) HandleDumpAndForward(w http.ResponseWriter, r *http.Request) {
+	a.Logger.Debugf("Dumping request from %s", r.RemoteAddr)
+	a.Logger.Debugf("Method: %s", r.Method)
+	a.Logger.Debugf("URL: %s", r.URL.String())
+	a.Logger.Debugf("Headers: %v", r.Header)
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		a.Logger.Debugf("Error reading request body: %v", err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore the body for subsequent reads
+
+	a.Logger.Debugf("Body: %s", string(bodyBytes))
+
+	// Forward the request to the real Kobo API
+	target, err := url.Parse("https://storeapi.kobo.com")
+	if err != nil {
+		a.Logger.Errorf("Error parsing target URL: %v", err)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ServeHTTP(w, r)
+}

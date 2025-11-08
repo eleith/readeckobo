@@ -1,0 +1,30 @@
+        # Proxy Kobo Store API so that we can modify the returned Instapaper URL.
+        location /instapaper-proxy/storeapi {
+                proxy_ssl_server_name on;
+                proxy_ssl_name storeapi.kobo.com;
+                proxy_set_header Host storeapi.kobo.com;
+                proxy_pass https://storeapi.kobo.com/;
+        }
+
+        location = /instapaper-proxy/storeapi/v1/initialization {
+                proxy_ssl_server_name on;
+                proxy_ssl_name storeapi.kobo.com;
+                proxy_set_header Host storeapi.kobo.com;
+                proxy_set_header Accept-Encoding "";
+                proxy_pass https://storeapi.kobo.com/;
+
+                sub_filter https://www.instapaper.com "$scheme://$host/instapaper-proxy/instapaper";
+                sub_filter_types application/json;
+        }
+
+        # Proxy to local Kobeck application
+        location /instapaper-proxy/instapaper/ {
+                proxy_pass http://readeckobo-upstream/;
+                proxy_set_header Host $host;
+                client_max_body_size 128M;
+
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header X-Forwarded-Prefix /instapaper-proxy/instapaper;
+        }
