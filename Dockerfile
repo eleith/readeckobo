@@ -18,6 +18,6 @@ WORKDIR /app
 RUN apk add --no-cache xxd
 
 COPY --from=builder /app/readeckobo /app/readeckobo
-COPY bin/generate-access-token /app/bin/generate-access-token
+COPY /bin/generate-token /app/bin/generate-token
 
 ENTRYPOINT ["/app/readeckobo"]

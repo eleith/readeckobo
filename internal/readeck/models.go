@@ -52,6 +52,7 @@ type Bookmark struct {
 	Title        string      `json:"title"`
 	Type         string      `json:"type"`
 	Updated      time.Time   `json:"updated"`
-		URL       string   `json:"url"`
-	WordCount    *int        `json:"word_count"`
+	URL          string      `json:"url"`
+	WordCount    int         `json:"word_count"`
+	Published    time.Time   `json:"published"`
 }

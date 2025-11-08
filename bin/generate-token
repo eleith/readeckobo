@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# Generates a new random token for a Kobo device and provides instructions
+# on how to add it to the configuration file.
+#
+
+# Generate a new UUID
+NEW_TOKEN=$(uuidgen)
+
+if [ -z "$NEW_TOKEN" ]; then
+  echo "Error: uuidgen command not found. Please install it or generate a UUID manually."
+  exit 1
+fi
+
+echo "Generated a new token for your device:"
+echo ""
+echo "  $NEW_TOKEN"
+echo ""
+echo "Please add this token to your 'config.yaml' file under the 'users' section."
+echo "For example:"
+echo ""
+echo "users:"
+echo "  - token: \"$NEW_TOKEN\""
+echo "    readeck_access_token: \"your-plain-text-readeck-access-token\""
+echo ""
+echo "You can get your Readeck access token from your Readeck instance's settings page."
