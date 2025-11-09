@@ -157,9 +157,6 @@ The `scripts/e2e-tests/` directory has simple shell scripts for testing each API
 endpoint. They're great for checking if everything is working as expected.
 
 ```sh
-# Make the scripts executable
-chmod +x scripts/e2e-tests/*.sh
-
 # Run the 'get' test
 ./scripts/e2e-tests/01-test-get.sh <YOUR_DEVICE_TOKEN>
 ```
