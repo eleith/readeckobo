@@ -15,7 +15,7 @@ FROM alpine:3.22.1
 WORKDIR /app
 
 # Install xxd for the generate-access-token script
-RUN apk add --no-cache xxd
+RUN apk add --no-cache xxd util-linux
 
 COPY --from=builder /app/readeckobo /app/readeckobo
 COPY /bin/generate-token /app/bin/generate-token
