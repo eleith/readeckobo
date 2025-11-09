@@ -1,7 +1,9 @@
 # readeckobo
 
-Got a Kobo e-reader and a [Readeck](https://readeck.com) account? This tool is
-pretends to be Instapaper, so your Kobo can sync with your Readeck articles.
+Got a Kobo e-reader and a [Readeck](https://readeck.com) account?
+
+This tool acts as an Instapaper endpoint, so your Kobo can sync with your
+Readeck articles.
 
 This project is a Go port of the original
 [kobeck](https://github.com/Lukas0907/kobeck) (written in python), but with a
