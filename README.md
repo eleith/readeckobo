@@ -62,14 +62,15 @@ docker-compose exec readeckobo bin/generate-encrypted-token.sh <YOUR_KOBO_SERIAL
 ```
 
 The script will output two important pieces of information:
-1.  A **plain text UUID token** to be used in your `config.yaml`.
-2.  An **encrypted token** to be used in your Kobo's configuration file.
+
+1. A **plain text UUID token** to be used in your `config.yaml`.
+2. An **encrypted token** to be used in your Kobo's configuration file.
 
 ### 4. Configure Your `readeckobo` and Kobo Device
 
 Follow the output from the script to configure your services.
 
-1.  **Update `config.yaml`**: Add the plain text UUID token to the `users`
+1. **Update `config.yaml`**: Add the plain text UUID token to the `users`
     section of your `config.yaml`.
 
     ```yaml
@@ -78,11 +79,11 @@ Follow the output from the script to configure your services.
         readeck_access_token: "a-readeck-api-token"
     ```
 
-2.  **Update Your Kobo**: Mount your Kobo and find the
+2. **Update Your Kobo**: Mount your Kobo and find the
     `.kobo/Kobo/Kobo eReader.conf` file. Add or update these settings using the
     **encrypted** token from the script's output.
 
-    ```toml
+    ```ini
     [OneStoreServices]
     api_endpoint=https://readeckobo.example.com/storeapi
     instapaper_env_url=https://readeckobo.example.com/instapaper
