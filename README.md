@@ -2,7 +2,7 @@
 
 Got a Kobo e-reader and a [Readeck](https://readeck.com) account?
 
-This tool acts as an Instapaper endpoint, so your Kobo can sync with your
+This tool acts as an Instapaper proxy, so your Kobo can sync with your
 Readeck articles.
 
 This project is a Go port of the original
