@@ -1,23 +1,18 @@
 # readeckobo
 
-Got a Kobo e-reader and a [Readeck](https://readeck.com) account?
-
 This tool acts as an Instapaper proxy, so your Kobo can sync with your
-Readeck articles.
+[Readeck](https://readeck.com) articles.
 
-This project is a Go port of the original
-[kobeck](https://github.com/Lukas0907/kobeck) (written in python), but with a
-few more bells and whistles like multi-user support and better logging.
+This is a Go port of the original [kobeck](https://github.com/Lukas0907/kobeck),
+evolved to support multiple users, logging, performance improvements and more.
 
 ## ✨ Features
 
-* 📚 Fetches and lists un-archived articles from Readeck for Kobo devices.
-* 📥 Downloads article content in a Kobo-compatible format.
-* ✅ Handles actions like archiving, re-adding, favoriting, and deleting
-articles by updating Readeck.
-* 🖼️ Converts images to JPEG format on the fly for better e-reader
-compatibility.
-* 🤝 Supports multiple Kobo devices with different tokens.
+* 📚 Syncs non-archived articles from Readeck to Kobo
+* 📰 Downloads article content and image for each bookmark
+* 📋️ supports archiving, re-adding, favoriting, and deleting
+* 📷️ Converts images to JPEG format for e-reader compatibility
+* 👥 Supports multiple Kobo devices and readeck accounts
 
 ## 🚀 Quick Start (for Users)
 
@@ -43,6 +38,7 @@ users:
 Once your configuration is ready, fire it up!
 
 ```sh
+docker-compose build
 docker-compose up -d
 ```
 
@@ -106,11 +102,13 @@ Your Kobo device periodically re-syncs its configuration from Kobo's servers,
 which can overwrite your custom Instapaper endpoint. The proxy rules below
 ensure this connection is preserved.
 
+<!-- markdownlint-disable MD013 -->
 | Location Block                                  | Proxies To               | Purpose                                                                                             |
 | ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
 | `/instapaper-proxy/instapaper/`                 | `readeckobo` application | Handles the main Instapaper API requests (sync, download, etc.) to your `readeckobo` instance.      |
 | `/instapaper-proxy/storeapi/`                   | `storeapi.kobo.com`      | Forwards general API requests to Kobo's servers.                                                    |
 | `/instapaper-proxy/storeapi/v1/initialization`  | `storeapi.kobo.com`      | Intercepts the Kobo configuration response to rewrite the Instapaper URL back to your proxy endpoint. |
+<!-- markdownlint-enable MD013 -->
 
 Without these rules, your Kobo will eventually lose its connection to `readeckobo`.
 
@@ -118,13 +116,9 @@ Without these rules, your Kobo will eventually lose its connection to `readeckob
 
 A little security goes a long way.
 
-* **Use HTTPS:** Seriously. Run this behind a reverse proxy that provides HTTPS.
-* **Stay Local:** For best security, don't expose `readeckobo` to the public
-internet. Keep it on your local network.
-* **Lock Down Your Kobo:** Set a password on your Kobo to prevent someone from
-grabbing your proxy tokens.
-* **Lost Device?** If your Kobo goes on an adventure without you, remove its
-token from `config.yaml` and restart the server.
+* **Use HTTPS:** deploy behind a reverse proxy that provides HTTPS
+* **Stay Local:** Keep it on your local private network
+* **Kobo Password:** prevent unauthorized mounting with a Kobo password
 
 ## 🧑‍💻 For Developers
 
@@ -147,10 +141,10 @@ The server will be available at `http://localhost:8080`.
 <!-- markdownlint-disable MD013 -->
 | Endpoint                   | Description |
 | -------------------------- | ----------- |
-| `POST /api/kobo/get`       | **Fetches article list.** Syncs new, updated, and deleted articles from Readeck. |
-| `POST /api/kobo/download` | **Downloads article content.** Grabs the content of an article for offline reading. |
-| `POST /api/kobo/send`     | **Sends updates.** Handles archiving, favoriting, deleting, or adding articles. |
-| `GET /api/convert-image`  | **Converts images.** A helper endpoint to convert images to JPEG on the fly. |
+| `POST /api/kobo/get`       | syncs non-archived articles from Readeck. |
+| `POST /api/kobo/download` | downloads the content of an article for offline reading. |
+| `POST /api/kobo/send`     | handles archiving, favoriting, deleting, or adding new articles. |
+| `GET /api/convert-image`  | a helper endpoint to convert all article images to JPEG |
 <!-- markdownlint-enable MD013 -->
 
 ### Testing
