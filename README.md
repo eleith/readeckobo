@@ -85,8 +85,8 @@ Follow the output from the script to configure your services.
 
     ```ini
     [OneStoreServices]
-    api_endpoint=https://readeckobo.example.com/storeapi
-    instapaper_env_url=https://readeckobo.example.com/instapaper
+    api_endpoint=https://readeckobo.example.com/instapaper-proxy/storeapi
+    instapaper_env_url=https://readeckobo.example.com/instapaper-proxy/instapaper
 
     [Instapaper]
     AccessToken=@ByteArray(<THE-ENCRYPTED-TOKEN-FROM-THE-SCRIPT>)
@@ -96,11 +96,21 @@ Replace `readeckobo.example.com` with the hostname of your proxy instance.
 
 ### 5. Set Up a Reverse Proxy
 
-`readeckobo` is designed to be run behind a reverse proxy. This is how you'll
-handle HTTPS and expose it to the internet safely.
+`readeckobo` must be run behind a reverse proxy to handle HTTPS. It's crucial
+to proxy three specific location blocks, as shown in our `nginx.conf.snippet`
+example.
 
-We've included an Nginx example in `nginx.conf.snippet`. Examples for Traefik,
-Caddy, or others would be welcome contributions!
+Your Kobo device periodically re-syncs its configuration from Kobo's servers,
+which can overwrite your custom Instapaper endpoint. The proxy rules below
+ensure this connection is preserved.
+
+| Location Block                                  | Proxies To               | Purpose                                                                                             |
+| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `/instapaper-proxy/instapaper/`                 | `readeckobo` application | Handles the main Instapaper API requests (sync, download, etc.) to your `readeckobo` instance.      |
+| `/instapaper-proxy/storeapi/`                   | `storeapi.kobo.com`      | Forwards general API requests to Kobo's servers.                                                    |
+| `/instapaper-proxy/storeapi/v1/initialization`  | `storeapi.kobo.com`      | Intercepts the Kobo configuration response to rewrite the Instapaper URL back to your proxy endpoint. |
+
+Without these rules, your Kobo will eventually lose its connection to `readeckobo`.
 
 ## 🔒 A Quick Word on Security
 

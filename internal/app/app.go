@@ -84,7 +84,7 @@ type GetRequest struct {
 	Offset      string     `json:"offset"`
 	State       string     `json:"state"`
 	Total       string     `json:"total"`
-	Since       *time.Time `json:"since"`
+	Since       any `json:"since"`
 }
 
 // KoboGetResponse represents the outgoing response for /api/kobo/get
@@ -139,10 +139,23 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	count, _ := strconv.Atoi(req.Count)
 	offset, _ := strconv.Atoi(req.Offset)
 
+	var since *time.Time
+	if req.Since != nil {
+		a.Logger.Debugf("Received 'since' parameter with value: %v (type: %T)", req.Since, req.Since)
+		if v, ok := req.Since.(float64); ok { // JSON numbers are decoded as float64
+			t := time.Unix(int64(v), 0)
+			since = &t
+		} else {
+			a.Logger.Warnf("Unexpected type for 'since' parameter: %T. Expected float64 or nil.", req.Since)
+		}
+	} else {
+		a.Logger.Debugf("Received 'since' parameter is nil (full sync).")
+	}
+
 	resultList := make(map[string]any) // Declare resultList here
 
 	ctx := r.Context()
-	bsyncs, err := readeckClient.GetBookmarksSync(ctx, req.Since) // Use the new client
+	bsyncs, err := readeckClient.GetBookmarksSync(ctx, since) // Use the new client
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get bookmark syncs: %v", err), http.StatusInternalServerError)
 		a.Logger.Errorf("Error getting bookmark syncs for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
@@ -597,6 +610,9 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		case "add":
 			url, _ := actionMap["url"].(string)
 			err = readeckClient.CreateBookmark(ctx, url) // Use the new client
+		case "opened_item", "left_item":
+			// Kobo sends these, but Readeck doesn't need them. No-op.
+			err = nil
 		default:
 			err = fmt.Errorf("unknown action: %s", action)
 		}
