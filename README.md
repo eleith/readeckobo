@@ -1,14 +1,11 @@
 # readeckobo
 
-`readeckobo` bridges Kobo's Instapaper app and a [Readeck](https://readeck.com)
-service, enabling you to use your Readeck account on your Kobo e-reader.
+Got a Kobo e-reader and a [Readeck](https://readeck.com) account? This tool is
+pretends to be Instapaper, so your Kobo can sync with your Readeck articles.
 
-It acts as a proxy for Instapaper's Kobo API, translating requests and responses.
-as a proxy for Instapaper's Kobo API, translating requests and responses.
-
-This project is a Go-based port of the original Python-based
-[kobeck](https://github.com/Lukas0907/kobeck), with significant deviations to
-support multiple users, improve logging, and leverage newer Readeck APIs.
+This project is a Go port of the original
+[kobeck](https://github.com/Lukas0907/kobeck) (written in python), but with a
+few more bells and whistles like multi-user support and better logging.
 
 ## ✨ Features
 
@@ -20,10 +17,13 @@ articles by updating Readeck.
 compatibility.
 * 🤝 Supports multiple Kobo devices with different tokens.
 
-## ⚙️ Configuration (For Users)
+## 🚀 Quick Start (for Users)
 
-The application is configured using a `config.yaml` file. An example is provided
-in `config.yaml.example`:
+Getting up and running is a breeze with Docker.
+
+### 1. Configure `readeckobo`
+
+First, copy `config.yaml.example` to `config.yaml` and edit it to match your setup.
 
 ```yaml
 server:
@@ -34,30 +34,34 @@ readeck:
 users:
   - token: "a-random-uuid-token-for-a-kobo"
     readeck_access_token: "a-readeck-api-token"
-  - token: "another-random-uuid-token-for-another-kobo"
-    readeck_access_token: "another-readeck-api-token"
 ```
 
-### Generating a Device Token
+### 2. Run with Docker
 
-User tokens are just random UUID. this allows the proxy to support multiple kobo
-devices that want to connect to different readeck accounts.
-
-you can use the `generate-token`
-script located in the `bin` directory:
+Once your configuration is ready, fire it up!
 
 ```sh
-docker-compose build
-docker-compose up
+docker-compose up -d
+```
+
+The server will be available at `http://localhost:8080`.
+
+### 3. Generate a Device Token
+
+You'll need a unique token for each Kobo device. With `readeckobo` running, use
+this command to generate one:
+
+```sh
 docker-compose exec readeckobo bin/generate-token
 ```
 
-### Configure Kobo
+Pop this token into your `config.yaml` and the `AccessToken` field in your
+Kobo's configuration file.
 
-Mount your kobo and edit the `./kobo/Kobo/Kobo eReader.conf` file.
+### 4. Configure Your Kobo
 
-The file has a large list of settings, look for the following settings and
-update them or add them if they don't already exist
+Mount your Kobo and find the `.kobo/Kobo/Kobo eReader.conf` file. Add or update
+these settings:
 
 ```toml
 [OneStoreServices]
@@ -65,81 +69,74 @@ api_endpoint=https://readeckobo.example.com/storeapi
 instapaper_env_url=https://readeckobo.example.com/instapaper
 
 [Instapaper]
-AccessToken=@ByteArray(<GENERATED-DEVICE-TOKEN>)
+AccessToken=@ByteArray(<YOUR-GENERATED-DEVICE-TOKEN>)
 ```
 
 Replace `readeckobo.example.com` with the hostname of your proxy instance.
 
-## 🚀 Deployment / Reverse Proxy Setup
+### 5. Set Up a Reverse Proxy
 
-`readeckobo` must be run behind a reverse proxy.
+`readeckobo` is designed to be run behind a reverse proxy. This is how you'll
+handle HTTPS and expose it to the internet safely.
 
-checkout the nginx snippet at `nginx.conf.snippet` for how to configure the
-proxy. there are no examples yet for caddy, traefik, etc etc.
+We've included an Nginx example in `nginx.conf.snippet`. Examples for Traefik,
+Caddy, or others would be welcome contributions!
 
-## 🔒 Security Considerations
+## 🔒 A Quick Word on Security
 
-Please be aware that using this integration requires some attention to keep your
-readeck and kobo secure.
+A little security goes a long way.
 
-* **HTTPS is strongly recommended.** Always run `readeckobo` behind a reverse
-proxy that provides HTTPS.
-* **Network Exposure:** For the best security, do not expose the `readeckobo`
-server to the public internet. Keep it on your local network
-* **Device Security:** Anyone with physical access to your Kobo device can
-potentially access your Readeck account by mounting it an extracting the proxy
-tokens. It is recommended to set a password on your Kobo device to prevent
-unauthorized mounting.
-* **Token Revocation:** If you lose your device, you
-should immediately remove the corresponding user entry from your `config.yaml`
-and restart the `readeckobo` server.
+* **Use HTTPS:** Seriously. Run this behind a reverse proxy that provides HTTPS.
+* **Stay Local:** For best security, don't expose `readeckobo` to the public
+internet. Keep it on your local network.
+* **Lock Down Your Kobo:** Set a password on your Kobo to prevent someone from
+grabbing your proxy tokens.
+* **Lost Device?** If your Kobo goes on an adventure without you, remove its
+token from `config.yaml` and restart the server.
+
+## 🧑‍💻 For Developers
 
 ### Building and Running Locally
-when you are ready to deploy, setup your reverse proxy, get your
-docker-compose.yml file in place and then run!
 
 ```sh
- docker-compose build
- docker-compose up -d
+# Build the docker image
+docker-compose build
+
+# Run the server
+docker-compose up
 ```
 
 The server will be available at `http://localhost:8080`.
 
-## 🧑‍💻 Development (For Developers)
-
 ### API Endpoints
+
+`readeckobo` emulates the Instapaper API for Kobo devices. Here's a quick overview:
 
 <!-- markdownlint-disable MD013 -->
 | Endpoint                   | Description |
 | -------------------------- | ----------- |
-| `POST /api/kobo/get`       | **Fetches the list of articles.** The Kobo device calls this to sync the list of new, updated, and deleted articles. Under the hood, `readeckobo` calls Readeck's `GET /api/bookmarks/sync` to get a list of changes and then `POST /api/bookmarks/sync` to fetch detailed metadata for the updated articles. It filters out archived articles before returning the list to the device. |
-| `POST /api/kobo/download` | **Downloads article content.** The Kobo device calls this with an article URL to get its content for offline reading. Under the hood, `readeckobo` searches for the bookmark by its URL (by calling Readeck's `GET /api/bookmarks`) and then fetches the article content (by calling `GET /api/bookmarks/{id}/article`). It also processes images for Kobo compatibility. |
-| `POST /api/kobo/send`     | **Sends updates to Readeck.** The Kobo device calls this to report actions like archiving, favoriting, deleting, or adding an article. Under the hood, `readeckobo` translates these actions into the appropriate Readeck API calls (`PATCH /api/bookmarks/{id}` for updates or `POST /api/bookmarks` for additions). |
-| `GET /api/convert-image`  | **Converts images for display.** This is an internal helper endpoint used by the downloaded article content to convert images to a Kobo-friendly JPEG format on the fly. |
+| `POST /api/kobo/get`       | **Fetches article list.** Syncs new, updated, and deleted articles from Readeck. |
+| `POST /api/kobo/download` | **Downloads article content.** Grabs the content of an article for offline reading. |
+| `POST /api/kobo/send`     | **Sends updates.** Handles archiving, favoriting, deleting, or adding articles. |
+| `GET /api/convert-image`  | **Converts images.** A helper endpoint to convert images to JPEG on the fly. |
 <!-- markdownlint-enable MD013 -->
 
-### Testing with E2E Scripts
+### Testing
 
-The `scripts/e2e-tests/` directory contains simple shell scripts to test each
-API endpoint. These are useful for verifying that your `readeckobo` setup and
-connection to Readeck are working correctly.
-
-Each script requires parameters, such as your device token. Run a script without
-arguments to see its usage instructions.
-
-Example:
+The `scripts/e2e-tests/` directory has simple shell scripts for testing each API
+endpoint. They're great for checking if everything is working as expected.
 
 ```sh
-# Make sure the scripts are executable
+# Make the scripts executable
 chmod +x scripts/e2e-tests/*.sh
 
 # Run the 'get' test
 ./scripts/e2e-tests/01-test-get.sh <YOUR_DEVICE_TOKEN>
 ```
 
-### Using the Makefile
+### Makefile Targets
 
-The `Makefile` provides several useful targets:
+The `Makefile` has some handy targets:
 
 * `make build`: Build the application binary.
 * `make test`: Run all unit tests.
