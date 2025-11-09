@@ -14,10 +14,10 @@ FROM alpine:3.22.1
 
 WORKDIR /app
 
-# Install xxd for the generate-access-token script
-RUN apk add --no-cache xxd util-linux
+# Install tools for the token generation script
+RUN apk add --no-cache xxd util-linux openssl coreutils
 
 COPY --from=builder /app/readeckobo /app/readeckobo
-COPY /bin/generate-token /app/bin/generate-token
+COPY /bin/generate-encrypted-token.sh /app/bin/generate-encrypted-token.sh
 
 ENTRYPOINT ["/app/readeckobo"]

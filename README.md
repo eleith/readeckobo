@@ -48,29 +48,48 @@ The server will be available at `http://localhost:8080`.
 
 ### 3. Generate a Device Token
 
-You'll need a unique token for each Kobo device. With `readeckobo` running, use
-this command to generate one:
+For each Kobo device, you will need a unique token. This process involves
+generating a token and then encrypting it for the Kobo device.
+
+First, find your Kobo's serial number, which is available under
+**Settings -> Device Information** on your e-reader.
+
+With `readeckobo` running, use this command to generate and encrypt the token,
+replacing `<YOUR_KOBO_SERIAL>` with your device's serial number:
 
 ```sh
-docker-compose exec readeckobo bin/generate-token
+docker-compose exec readeckobo bin/generate-encrypted-token.sh <YOUR_KOBO_SERIAL>
 ```
 
-Pop this token into your `config.yaml` and the `AccessToken` field in your
-Kobo's configuration file.
+The script will output two important pieces of information:
+1.  A **plain text UUID token** to be used in your `config.yaml`.
+2.  An **encrypted token** to be used in your Kobo's configuration file.
 
-### 4. Configure Your Kobo
+### 4. Configure Your `readeckobo` and Kobo Device
 
-Mount your Kobo and find the `.kobo/Kobo/Kobo eReader.conf` file. Add or update
-these settings:
+Follow the output from the script to configure your services.
 
-```toml
-[OneStoreServices]
-api_endpoint=https://readeckobo.example.com/storeapi
-instapaper_env_url=https://readeckobo.example.com/instapaper
+1.  **Update `config.yaml`**: Add the plain text UUID token to the `users`
+    section of your `config.yaml`.
 
-[Instapaper]
-AccessToken=@ByteArray(<YOUR-GENERATED-DEVICE-TOKEN>)
-```
+    ```yaml
+    users:
+      - token: "<THE-PLAIN-TEXT-UUID-FROM-THE-SCRIPT>"
+        readeck_access_token: "a-readeck-api-token"
+    ```
+
+2.  **Update Your Kobo**: Mount your Kobo and find the
+    `.kobo/Kobo/Kobo eReader.conf` file. Add or update these settings using the
+    **encrypted** token from the script's output.
+
+    ```toml
+    [OneStoreServices]
+    api_endpoint=https://readeckobo.example.com/storeapi
+    instapaper_env_url=https://readeckobo.example.com/instapaper
+
+    [Instapaper]
+    AccessToken=@ByteArray(<THE-ENCRYPTED-TOKEN-FROM-THE-SCRIPT>)
+    ```
 
 Replace `readeckobo.example.com` with the hostname of your proxy instance.
 
