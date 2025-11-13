@@ -180,7 +180,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Debugf("Sample IDs from batch response: %v", sampleIDs)
 	}
 
-	actualBookmarks := []map[string]any{} // To store processed, non-archived bookmarks in order
+	actualBookmarks := []models.KoboArticleItem{} // To store processed, non-archived bookmarks in order
 	var totalNonArchivedBookmarks int
 
 	// Iterate through the original sync events to maintain order and apply filtering
@@ -211,45 +211,50 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Construct the bookmark entry for resultList
-		entry := make(map[string]any)
-		entry["authors"] = make(map[string]any)
+		authors := make(map[string]models.KoboAuthor)
 		for _, author := range bookmark.Authors {
-			entry["authors"].(map[string]any)[author] = map[string]string{"author_id": author, "name": author}
+			authors[author] = models.KoboAuthor{AuthorID: author, Name: author}
 		}
-		entry["excerpt"] = bookmark.Description
-		entry["favorite"] = "0"
-		entry["given_title"] = bookmark.Title
-		entry["given_url"] = bookmark.URL
-		entry["has_image"] = "0"
-		entry["has_video"] = "0"
-		entry["image"] = map[string]any{"src": ""}
-		entry["images"] = map[string]any{}
-		entry["is_article"] = "1"
-		entry["item_id"] = bookmark.ID
-		entry["resolved_id"] = bookmark.ID
-		entry["resolved_title"] = bookmark.Title
-		entry["resolved_url"] = bookmark.URL
-		entry["status"] = "0"
-		entry["tags"] = make(map[string]any)
+
+		tags := make(map[string]models.KoboTag)
 		for _, label := range bookmark.Labels {
-			entry["tags"].(map[string]any)[label] = map[string]string{"item_id": bsync.ID, "tag": label}
+			tags[label] = models.KoboTag{ItemID: bsync.ID, Tag: label}
 		}
-		entry["time_added"] = bookmark.Created.Unix()
-		entry["time_read"] = 0
-		entry["time_updated"] = bookmark.Updated.Unix()
-		entry["videos"] = []any{}
-		entry["word_count"] = bookmark.WordCount
-		entry["_optional"] = make(map[string]any)
+
+		entry := models.KoboArticleItem{
+			Authors:       authors,
+			Excerpt:       bookmark.Description,
+			Favorite:      "0",
+			GivenTitle:    bookmark.Title,
+			GivenURL:      bookmark.URL,
+			HasImage:      "0",
+			HasVideo:      "0",
+			Image:         models.KoboImage{Src: ""},
+			Images:        make(map[string]models.KoboImage),
+			IsArticle:     "1",
+			ItemID:        bookmark.ID,
+			ResolvedID:    bookmark.ID,
+			ResolvedTitle: bookmark.Title,
+			ResolvedURL:   bookmark.URL,
+			Status:        "0",
+			Tags:          tags,
+			TimeAdded:     bookmark.Created.Unix(),
+			TimeRead:      0,
+			TimeUpdated:   bookmark.Updated.Unix(),
+			Videos:        []any{},
+			WordCount:     bookmark.WordCount,
+			Optional:      make(map[string]any),
+		}
 
 		if bookmark.Resources.Image != nil && bookmark.Resources.Image.Src != "" {
-			entry["has_image"] = "1"
-			entry["image"].(map[string]any)["src"] = bookmark.Resources.Image.Src
-			entry["images"].(map[string]any)["1"] = map[string]any{
-				"image_id": "1",
-				"item_id":  "1",
-				"src":      bookmark.Resources.Image.Src,
+			entry.HasImage = "1"
+			entry.Image.Src = bookmark.Resources.Image.Src
+			entry.Images["1"] = models.KoboImage{
+				ImageID: "1",
+				ItemID:  "1",
+				Src:     bookmark.Resources.Image.Src,
 			}
-			entry["_optional"].(map[string]any)["top_image_url"] = bookmark.Resources.Image.Src
+			entry.Optional["top_image_url"] = bookmark.Resources.Image.Src
 		}
 		actualBookmarks = append(actualBookmarks, entry)
 	}
@@ -270,7 +275,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 
 	// Populate resultList with the paginated and filtered bookmarks
 	for _, bm := range actualBookmarks[startIndex:endIndex] {
-		resultList[bm["item_id"].(string)] = bm
+		resultList[bm.ItemID] = bm
 	}
 
 	resp := models.KoboGetResponse{
