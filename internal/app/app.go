@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -68,6 +69,133 @@ func WithReadeckHTTPClient(client *http.Client) Option {
 	}
 }
 
+func (a *App) handleFullSync(ctx context.Context, readeckClient *readeck.Client, req *models.KoboGetRequest) (map[string]models.KoboArticleItem, int, error) {
+	count, _ := strconv.Atoi(req.Count)
+	offset, _ := strconv.Atoi(req.Offset)
+
+	bsyncs, err := readeckClient.GetBookmarksSync(ctx, nil)
+	if err != nil {
+		a.Logger.Errorf("Full Sync: Error getting bookmark syncs: %v", err)
+		return nil, 0, fmt.Errorf("failed to get bookmark syncs: %w", err)
+	}
+	a.Logger.Debugf("Full Sync: GetBookmarksSync returned %d sync events.", len(bsyncs))
+
+	var candidateBookmarkIDs []string
+	for _, bsync := range bsyncs {
+		if bsync.Type != "delete" {
+			candidateBookmarkIDs = append(candidateBookmarkIDs, bsync.ID)
+		}
+	}
+
+	bookmarksDetailsMap, err := readeckClient.SyncBookmarksContent(ctx, candidateBookmarkIDs)
+	if err != nil {
+		a.Logger.Errorf("Full Sync: Error getting bookmark details: %v", err)
+		return nil, 0, fmt.Errorf("failed to get bookmark details: %w", err)
+	}
+
+	actualBookmarks := []models.KoboArticleItem{}
+	for _, bsync := range bsyncs {
+		if bsync.Type == "delete" {
+			continue
+		}
+		bookmark, found := bookmarksDetailsMap[bsync.ID]
+		if !found || bookmark == nil || bookmark.IsArchived {
+			continue
+		}
+
+		favoriteStatus := "0"
+		if bookmark.IsMarked {
+			favoriteStatus = "1"
+		}
+
+		entry := buildKoboArticleItem(bookmark, &bsync)
+		entry.Status = "0"
+		entry.Favorite = favoriteStatus
+		actualBookmarks = append(actualBookmarks, entry)
+	}
+
+	totalNonArchivedBookmarks := len(actualBookmarks)
+	resultList := make(map[string]models.KoboArticleItem)
+
+	startIndex := offset
+	endIndex := offset + count
+	if count == 0 {
+		endIndex = len(actualBookmarks)
+	}
+	if startIndex > len(actualBookmarks) {
+		startIndex = len(actualBookmarks)
+	}
+	if endIndex > len(actualBookmarks) {
+		endIndex = len(actualBookmarks)
+	}
+
+	for _, bm := range actualBookmarks[startIndex:endIndex] {
+		resultList[bm.ItemID] = bm
+	}
+
+	return resultList, totalNonArchivedBookmarks, nil
+}
+
+func (a *App) handleIncrementalSync(ctx context.Context, readeckClient *readeck.Client, since *time.Time) (map[string]models.KoboArticleItem, int, error) {
+	resultList := make(map[string]models.KoboArticleItem)
+
+	bsyncs, err := readeckClient.GetBookmarksSync(ctx, since)
+	if err != nil {
+		a.Logger.Errorf("Incremental Sync: Error getting bookmark syncs: %v", err)
+		return nil, 0, fmt.Errorf("failed to get bookmark syncs: %w", err)
+	}
+	a.Logger.Debugf("Incremental Sync: GetBookmarksSync returned %d sync events.", len(bsyncs))
+
+	var candidateBookmarkIDs []string
+	for _, bsync := range bsyncs {
+		if bsync.Type == "delete" {
+			resultList[bsync.ID] = models.KoboArticleItem{ItemID: bsync.ID, Status: "2"}
+		} else {
+			candidateBookmarkIDs = append(candidateBookmarkIDs, bsync.ID)
+		}
+	}
+
+	if len(candidateBookmarkIDs) == 0 {
+		return resultList, 0, nil
+	}
+
+	bookmarksDetailsMap, err := readeckClient.SyncBookmarksContent(ctx, candidateBookmarkIDs)
+	if err != nil {
+		a.Logger.Errorf("Incremental Sync: Error getting bookmark details: %v", err)
+		return nil, 0, fmt.Errorf("failed to get bookmark details: %w", err)
+	}
+
+	totalNonArchivedBookmarks := 0
+	for _, bsync := range bsyncs {
+		if bsync.Type == "delete" {
+			continue
+		}
+
+		bookmark, found := bookmarksDetailsMap[bsync.ID]
+		if !found || bookmark == nil {
+			continue
+		}
+
+		favoriteStatus := "0"
+		if bookmark.IsMarked {
+			favoriteStatus = "1"
+		}
+
+		entry := buildKoboArticleItem(bookmark, &bsync)
+		entry.Favorite = favoriteStatus
+
+		if bookmark.IsArchived {
+			entry.Status = "1"
+		} else {
+			entry.Status = "0"
+			totalNonArchivedBookmarks++
+		}
+		resultList[bookmark.ID] = entry
+	}
+
+	return resultList, totalNonArchivedBookmarks, nil
+}
+
 func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -105,9 +233,6 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, _ := strconv.Atoi(req.Count)
-	offset, _ := strconv.Atoi(req.Offset)
-
 	var since *time.Time
 	if req.Since != nil {
 		a.Logger.Debugf("Received 'since' parameter with value: %v (type: %T)", req.Since, req.Since)
@@ -117,155 +242,83 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		} else {
 			a.Logger.Warnf("Unexpected type for 'since' parameter: %T. Expected float64 or nil.", req.Since)
 		}
+	}
+
+	var resultList map[string]models.KoboArticleItem
+	var total int
+
+	if since == nil {
+		a.Logger.Debugf("Handling full sync.")
+		resultList, total, err = a.handleFullSync(r.Context(), readeckClient, &req)
 	} else {
-		a.Logger.Debugf("Received 'since' parameter is nil (full sync).")
+		a.Logger.Debugf("Handling incremental sync.")
+		resultList, total, err = a.handleIncrementalSync(r.Context(), readeckClient, since)
 	}
 
-	resultList := make(map[string]any)
-
-	ctx := r.Context()
-	bsyncs, err := readeckClient.GetBookmarksSync(ctx, since)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get bookmark syncs: %v", err), http.StatusInternalServerError)
-		a.Logger.Errorf("Error getting bookmark syncs for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	a.Logger.Debugf("HandleKoboGet: GetBookmarksSync returned %d sync events.", len(bsyncs))
-
-	var candidateBookmarkIDs []string
-	for _, bsync := range bsyncs {
-		if bsync.Type == "delete" {
-			resultList[bsync.ID] = map[string]any{
-				"item_id": bsync.ID,
-				"status":  "2",
-			}
-		} else {
-			candidateBookmarkIDs = append(candidateBookmarkIDs, bsync.ID)
-		}
-	}
-	a.Logger.Debugf("HandleKoboGet: %d candidate bookmark IDs identified for batch fetching.", len(candidateBookmarkIDs))
-
-	bookmarksDetailsMap, err := readeckClient.SyncBookmarksContent(ctx, candidateBookmarkIDs)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get bookmark details in batch: %v", err), http.StatusInternalServerError)
-		a.Logger.Errorf("Error getting bookmark details in batch for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
-		return
-	}
-
-	a.Logger.Debugf("SyncBookmarksContent returned %d bookmark details.", len(bookmarksDetailsMap))
-	if len(bookmarksDetailsMap) > 0 {
-		sampleIDs := make([]string, 0, 5)
-		for id := range bookmarksDetailsMap {
-			sampleIDs = append(sampleIDs, id)
-			if len(sampleIDs) == 5 {
-				break
-			}
-		}
-		a.Logger.Debugf("Sample IDs from batch response: %v", sampleIDs)
-	}
-
-	actualBookmarks := []models.KoboArticleItem{}
-	var totalNonArchivedBookmarks int
-
-	for _, bsync := range bsyncs {
-		if bsync.Type == "delete" {
-			continue
-		}
-
-		bookmark, found := bookmarksDetailsMap[bsync.ID]
-		if !found {
-			continue
-		}
-
-		if bookmark == nil {
-			a.Logger.Warnf("Bookmark details for ID %s were nil in batch response for /api/kobo/get, URL: %s, Params: %v", bsync.ID, r.URL.Path, r.URL.Query())
-			continue
-		}
-
-		if !bookmark.IsArchived {
-			totalNonArchivedBookmarks++
-		}
-
-		if bookmark.IsArchived {
-			continue
-		}
-
-		authors := make(map[string]models.KoboAuthor)
-		for _, author := range bookmark.Authors {
-			authors[author] = models.KoboAuthor{AuthorID: author, Name: author}
-		}
-
-		tags := make(map[string]models.KoboTag)
-		for _, label := range bookmark.Labels {
-			tags[label] = models.KoboTag{ItemID: bsync.ID, Tag: label}
-		}
-
-		entry := models.KoboArticleItem{
-			Authors:       authors,
-			Excerpt:       bookmark.Description,
-			Favorite:      "0",
-			GivenTitle:    bookmark.Title,
-			GivenURL:      bookmark.URL,
-			HasImage:      "0",
-			HasVideo:      "0",
-			Image:         models.KoboImage{Src: ""},
-			Images:        make(map[string]models.KoboImage),
-			IsArticle:     "1",
-			ItemID:        bookmark.ID,
-			ResolvedID:    bookmark.ID,
-			ResolvedTitle: bookmark.Title,
-			ResolvedURL:   bookmark.URL,
-			Status:        "0",
-			Tags:          tags,
-			TimeAdded:     bookmark.Created.Unix(),
-			TimeRead:      0,
-			TimeUpdated:   bookmark.Updated.Unix(),
-			Videos:        []any{},
-			WordCount:     bookmark.WordCount,
-			Optional:      make(map[string]any),
-		}
-
-		if bookmark.Resources.Image != nil && bookmark.Resources.Image.Src != "" {
-			entry.HasImage = "1"
-			entry.Image.Src = bookmark.Resources.Image.Src
-			entry.Images["1"] = models.KoboImage{
-				ImageID: "1",
-				ItemID:  "1",
-				Src:     bookmark.Resources.Image.Src,
-			}
-			entry.Optional["top_image_url"] = bookmark.Resources.Image.Src
-		}
-		actualBookmarks = append(actualBookmarks, entry)
-	}
-
-	startIndex := offset
-	endIndex := offset + count
-	if count == 0 {
-		endIndex = len(actualBookmarks)
-	}
-
-	if startIndex > len(actualBookmarks) {
-		startIndex = len(actualBookmarks)
-	}
-	if endIndex > len(actualBookmarks) {
-		endIndex = len(actualBookmarks)
-	}
-
-	for _, bm := range actualBookmarks[startIndex:endIndex] {
-		resultList[bm.ItemID] = bm
 	}
 
 	resp := models.KoboGetResponse{
 		Status: 1,
 		List:   resultList,
-		Total:  totalNonArchivedBookmarks,
+		Total:  total,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		a.Logger.Errorf("Error encoding response for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error encoding response for /api/kobo/get: %v", err)
 	}
+}
+
+func buildKoboArticleItem(bookmark *readeck.Bookmark, bsync *readeck.BookmarkSync) models.KoboArticleItem {
+	authors := make(map[string]models.KoboAuthor)
+	for _, author := range bookmark.Authors {
+		authors[author] = models.KoboAuthor{AuthorID: author, Name: author}
+	}
+
+	tags := make(map[string]models.KoboTag)
+	for _, label := range bookmark.Labels {
+		tags[label] = models.KoboTag{ItemID: bsync.ID, Tag: label}
+	}
+
+	entry := models.KoboArticleItem{
+		Authors:       authors,
+		Excerpt:       bookmark.Description,
+		GivenTitle:    bookmark.Title,
+		GivenURL:      bookmark.URL,
+		HasImage:      "0",
+		HasVideo:      "0",
+		Image:         &models.KoboImage{},
+		Images:        make(map[string]models.KoboImage),
+		IsArticle:     "1",
+		ItemID:        bookmark.ID,
+		ResolvedID:    bookmark.ID,
+		ResolvedTitle: bookmark.Title,
+		ResolvedURL:   bookmark.URL,
+		Tags:          tags,
+		TimeAdded:     bookmark.Created.Unix(),
+		TimeRead:      0,
+		TimeUpdated:   bookmark.Updated.Unix(),
+		Videos:        []any{},
+		WordCount:     bookmark.WordCount,
+		Optional:      make(map[string]any),
+	}
+
+	if bookmark.Resources.Image != nil && bookmark.Resources.Image.Src != "" {
+		entry.HasImage = "1"
+		entry.Image = &models.KoboImage{Src: bookmark.Resources.Image.Src}
+		entry.Images["1"] = models.KoboImage{
+			ImageID: "1",
+			ItemID:  "1",
+			Src:     bookmark.Resources.Image.Src,
+		}
+		entry.Optional["top_image_url"] = bookmark.Resources.Image.Src
+	}
+
+	return entry
 }
 
 func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {

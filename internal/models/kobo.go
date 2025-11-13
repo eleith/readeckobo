@@ -15,9 +15,9 @@ type KoboGetRequest struct {
 
 // KoboGetResponse represents the outgoing response for /api/kobo/get
 type KoboGetResponse struct {
-	Status int            `json:"status"`
-	List   map[string]any `json:"list"`
-	Total  int            `json:"total"`
+	Status int                         `json:"status"`
+	List   map[string]KoboArticleItem `json:"list"`
+	Total  int                         `json:"total"`
 }
 
 // KoboDownloadRequest represents the incoming request for /api/kobo/download
@@ -39,28 +39,28 @@ type KoboSendRequest struct {
 
 // KoboArticleItem represents an article in the Get response list.
 type KoboArticleItem struct {
-	Authors       map[string]KoboAuthor `json:"authors"`
-	Excerpt       string                `json:"excerpt"`
-	Favorite      string                `json:"favorite"`
-	GivenTitle    string                `json:"given_title"`
-	GivenURL      string                `json:"given_url"`
-	HasImage      string                `json:"has_image"`
-	HasVideo      string                `json:"has_video"`
-	Image         KoboImage             `json:"image"`
-	Images        map[string]KoboImage  `json:"images"`
-	IsArticle     string                `json:"is_article"`
+	Authors       map[string]KoboAuthor `json:"authors,omitempty"`
+	Excerpt       string                `json:"excerpt,omitempty"`
+	Favorite      string                `json:"favorite,omitempty"`
+	GivenTitle    string                `json:"given_title,omitempty"`
+	GivenURL      string                `json:"given_url,omitempty"`
+	HasImage      string                `json:"has_image,omitempty"`
+	HasVideo      string                `json:"has_video,omitempty"`
+	Image         *KoboImage            `json:"image,omitempty"`
+	Images        map[string]KoboImage  `json:"images,omitempty"`
+	IsArticle     string                `json:"is_article,omitempty"`
 	ItemID        string                `json:"item_id"`
-	ResolvedID    string                `json:"resolved_id"`
-	ResolvedTitle string                `json:"resolved_title"`
-	ResolvedURL   string                `json:"resolved_url"`
+	ResolvedID    string                `json:"resolved_id,omitempty"`
+	ResolvedTitle string                `json:"resolved_title,omitempty"`
+	ResolvedURL   string                `json:"resolved_url,omitempty"`
 	Status        string                `json:"status"`
-	Tags          map[string]KoboTag    `json:"tags"`
-	TimeAdded     int64                 `json:"time_added"`
-	TimeRead      int64                 `json:"time_read"`
-	TimeUpdated   int64                 `json:"time_updated"`
-	Videos        []any                 `json:"videos"`
-	WordCount     int                   `json:"word_count"`
-	Optional      map[string]any        `json:"_optional"`
+	Tags          map[string]KoboTag    `json:"tags,omitempty"`
+	TimeAdded     int64                 `json:"time_added,omitempty"`
+	TimeRead      int64                 `json:"time_read,omitempty"`
+	TimeUpdated   int64                 `json:"time_updated,omitempty"`
+	Videos        []any                 `json:"videos,omitempty"`
+	WordCount     int                   `json:"word_count,omitempty"`
+	Optional      map[string]any        `json:"_optional,omitempty"`
 }
 
 // KoboAuthor represents an author of an article.
