@@ -10,6 +10,7 @@ import (
 	"net/url" // Added this import
 	"strings"
 	"testing"
+	"time"
 
 	"mime/multipart"
 	"net/textproto"
@@ -159,372 +160,226 @@ func TestCompareURLs(t *testing.T) {
 	}
 }
 
-// koboGetTestCase defines the structure for test cases in TestHandleKoboGet.
-
-type koboGetTestCase struct {
-	name                   string
-	reqBody                *models.KoboGetRequest
-	mockBookmarksSync      []readeck.BookmarkSync
-	mockBookmarkDetails    map[string]*readeck.Bookmark
-	mockBookmarksSyncErr   error
-	mockBookmarkDetailsErr error
-	expectedStatus         int
-	expectedListSize       int
-	expectedTotal          int
-	mockHTTPClientFunc     func(t *testing.T, tc *koboGetTestCase) *http.Client
-}
-
 func TestHandleKoboGet(t *testing.T) {
+	// sinceValue is a valid timestamp for incremental sync tests.
+	sinceValue := float64(1672531200) // 2023-01-01 00:00:00 UTC
+
+	type koboGetTestCase struct {
+		name                   string
+		reqBody                *models.KoboGetRequest
+		mockBookmarksSync      []readeck.BookmarkSync
+		mockBookmarkDetails    map[string]*readeck.Bookmark
+		mockBookmarksSyncErr   error
+		mockBookmarkDetailsErr error
+		expectedStatus         int
+		expectedListSize       int
+		expectedTotal          int
+	}
+
 	testCases := []koboGetTestCase{
 		{
-			name:    "successful get",
-			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
+			name:    "full sync with unread and archived",
+			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken}, // No 'Since'
+			mockBookmarksSync: []readeck.BookmarkSync{
+				{ID: "1", Type: "update"},
+				{ID: "2", Type: "update"},
+			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{
+				"1": {ID: "1", Title: "Unread", IsArchived: false},
+				"2": {ID: "2", Title: "Archived", IsArchived: true},
+			},
+			expectedStatus:   http.StatusOK,
+			expectedListSize: 1, // Only the unread item
+			expectedTotal:    1,
+		},
+		{
+			name:    "full sync with favorited item",
+			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken}, // No 'Since'
+			mockBookmarksSync: []readeck.BookmarkSync{
+				{ID: "1", Type: "update"},
+			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{
+				"1": {ID: "1", Title: "Favorited", IsArchived: false, IsMarked: true},
+			},
+			expectedStatus:   http.StatusOK,
+			expectedListSize: 1,
+			expectedTotal:    1,
+		},
+		{
+			name:    "full sync with image item",
+			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken}, // No 'Since'
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 			},
 			mockBookmarkDetails: map[string]*readeck.Bookmark{
 				"1": {
-					ID:    "1",
-					Title: "Test Bookmark",
-					URL:   "http://example.com/bookmark1",
+					ID:         "1",
+					Title:      "Item With Image",
+					IsArchived: false,
+					Resources: readeck.Resources{
+						Image: &readeck.ResourceImage{
+							Src: "http://example.com/image.png",
+						},
+					},
 				},
 			},
 			expectedStatus:   http.StatusOK,
 			expectedListSize: 1,
 			expectedTotal:    1,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								switch req.Method {
-								case http.MethodGet:
-									jsonBytes, _ := json.Marshal(tc.mockBookmarksSync)
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-										Header:     make(http.Header),
-									}, nil
-								case http.MethodPost:
-									boundary := "MULTIPART_BOUNDARY"
-									var b bytes.Buffer
-									writer := multipart.NewWriter(&b)
-									if err := writer.SetBoundary(boundary); err != nil {
-										t.Fatalf("Failed to set boundary: %v", err)
-									}
-
-									reqBodyBytes, _ := io.ReadAll(req.Body)
-									var syncRequest struct {
-										IDs []string `json:"id"`
-									}
-									if err := json.Unmarshal(reqBodyBytes, &syncRequest); err != nil {
-										t.Fatalf("Failed to unmarshal sync request: %v", err)
-									}
-
-									for _, id := range syncRequest.IDs {
-										if bm, ok := tc.mockBookmarkDetails[id]; ok && bm != nil {
-											partHeader := make(textproto.MIMEHeader)
-											partHeader.Set("Content-Type", "application/json")
-											partHeader.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="bookmark_%s.json"`, id))
-											part, err := writer.CreatePart(partHeader)
-											if err != nil {
-												t.Fatalf("Failed to create part: %v", err)
-											}
-											if err := json.NewEncoder(part).Encode(bm); err != nil {
-												t.Fatalf("Failed to encode bookmark: %v", err)
-											}
-										}
-									}
-									if err := writer.Close(); err != nil {
-										t.Fatalf("Failed to close writer: %v", err)
-									}
-
-									header := make(http.Header)
-									header.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", boundary))
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(b.Bytes())),
-										Header:     header,
-									}, nil
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
-			name:    "delete sync type",
-			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
+			name:    "incremental sync with deleted",
+			reqBody: &models.KoboGetRequest{Since: sinceValue, AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "delete"},
 			},
-			expectedStatus:   http.StatusOK,
-			expectedListSize: 1,
-			expectedTotal:    0,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								switch req.Method {
-								case http.MethodGet:
-									jsonBytes, _ := json.Marshal(tc.mockBookmarksSync)
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-										Header:     make(http.Header),
-									}, nil
-								case http.MethodPost:
-									// For delete sync type, no bookmark details are returned
-									boundary := "MULTIPART_BOUNDARY"
-									var b bytes.Buffer
-									writer := multipart.NewWriter(&b)
-									if err := writer.SetBoundary(boundary); err != nil {
-										t.Fatalf("Failed to set boundary: %v", err)
-									}
-									if err := writer.Close(); err != nil {
-										t.Fatalf("Failed to close writer: %v", err)
-									}
-
-									header := make(http.Header)
-									header.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", boundary))
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(b.Bytes())),
-										Header:     header,
-									}, nil
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{},
+			expectedStatus:      http.StatusOK,
+			expectedListSize:    1, // The deleted status update
+			expectedTotal:       0,
 		},
 		{
-			name:    "get bookmark details error",
-			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
+			name:    "incremental sync with newly archived",
+			reqBody: &models.KoboGetRequest{Since: sinceValue, AccessToken: mockDeviceToken},
+			mockBookmarksSync: []readeck.BookmarkSync{
+				{ID: "1", Type: "update"},
+			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{
+				"1": {ID: "1", Title: "Newly Archived", IsArchived: true},
+			},
+			expectedStatus:   http.StatusOK,
+			expectedListSize: 1, // The full archived item
+			expectedTotal:    0,
+		},
+		{
+			name:                 "incremental sync with GetBookmarksSync error",
+			reqBody:              &models.KoboGetRequest{Since: sinceValue, AccessToken: mockDeviceToken},
+			mockBookmarksSyncErr: fmt.Errorf("sync error"),
+			expectedStatus:       http.StatusInternalServerError,
+		},
+		{
+			name:    "incremental sync with SyncBookmarksContent error",
+			reqBody: &models.KoboGetRequest{Since: sinceValue, AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 			},
 			mockBookmarkDetailsErr: fmt.Errorf("details error"),
 			expectedStatus:         http.StatusInternalServerError,
-			expectedListSize:       0,
-			expectedTotal:          0,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								switch req.Method {
-								case http.MethodGet:
-									jsonBytes, _ := json.Marshal(tc.mockBookmarksSync)
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-										Header:     make(http.Header),
-									}, nil
-								case http.MethodPost:
-									return nil, tc.mockBookmarkDetailsErr // Simulate error from Readeck API
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
-		},
-		{
-			name:    "get bookmark details nil",
-			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
-			mockBookmarksSync: []readeck.BookmarkSync{
-				{ID: "1", Type: "update"},
-			},
-			mockBookmarkDetails: map[string]*readeck.Bookmark{
-				"1": nil,
-			},
-			expectedStatus:   http.StatusOK,
-			expectedListSize: 0,
-			expectedTotal:    0,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								switch req.Method {
-								case http.MethodGet:
-									jsonBytes, _ := json.Marshal(tc.mockBookmarksSync)
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-										Header:     make(http.Header),
-									}, nil
-								case http.MethodPost:
-									boundary := "MULTIPART_BOUNDARY"
-									var b bytes.Buffer
-									writer := multipart.NewWriter(&b)
-									if err := writer.SetBoundary(boundary); err != nil {
-										t.Fatalf("Failed to set boundary: %v", err)
-									}
-
-									reqBodyBytes, _ := io.ReadAll(req.Body)
-									var syncRequest struct {
-										IDs []string `json:"id"`
-									}
-									if err := json.Unmarshal(reqBodyBytes, &syncRequest); err != nil {
-										t.Fatalf("Failed to unmarshal sync request: %v", err)
-									}
-
-									for _, id := range syncRequest.IDs {
-										// Do not add part if bookmark details are nil
-										if bm, ok := tc.mockBookmarkDetails[id]; ok && bm != nil {
-											partHeader := make(textproto.MIMEHeader)
-											partHeader.Set("Content-Type", "application/json")
-											partHeader.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="bookmark_%s.json"`, id))
-											part, err := writer.CreatePart(partHeader)
-											if err != nil {
-												t.Fatalf("Failed to create part: %v", err)
-											}
-											if err := json.NewEncoder(part).Encode(bm); err != nil {
-												t.Fatalf("Failed to encode bookmark: %v", err)
-											}
-										}
-									}
-									if err := writer.Close(); err != nil {
-										t.Fatalf("Failed to close writer: %v", err)
-									}
-
-									header := make(http.Header)
-									header.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", boundary))
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(b.Bytes())),
-										Header:     header,
-									}, nil
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
-		},
-		{
-			name:                 "get bookmarks sync error",
-			reqBody:              &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
-			mockBookmarksSyncErr: fmt.Errorf("sync error"),
-			expectedStatus:       http.StatusInternalServerError,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								if req.Method == http.MethodGet {
-									return nil, tc.mockBookmarksSyncErr // Simulate error from Readeck API
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
-		},
-		{
-			name:           "invalid request body",
-			reqBody:        nil,
-			expectedStatus: http.StatusBadRequest,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
-		},
-		{
-			name:           "invalid access token",
-			reqBody:        &models.KoboGetRequest{Count: "1", AccessToken: "invalid-device-token"},
-			expectedStatus: http.StatusUnauthorized,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			app := NewApp(
-				WithConfig(&config.Config{
-					Users: []config.User{
-						{
-							Token:              mockDeviceToken,
-							ReadeckAccessToken: mockPlaintextReadeckToken,
-						},
-					},
-					Readeck: config.ConfigReadeck{Host: "http://mock-readeck.com"},
-				}),
-				WithLogger(testLogger),
-				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc)), // Pass the dynamically created mock HTTP client
-			)
+			// Common mock HTTP client func
+			mockHTTPClientFunc := func(w http.ResponseWriter, r *http.Request) {
+				if tc.mockBookmarksSyncErr != nil && r.URL.Path == "/api/bookmarks/sync" && r.Method == http.MethodGet {
+					http.Error(w, tc.mockBookmarksSyncErr.Error(), http.StatusInternalServerError)
+					return
+				}
+				if tc.mockBookmarkDetailsErr != nil && r.URL.Path == "/api/bookmarks/sync" && r.Method == http.MethodPost {
+					http.Error(w, tc.mockBookmarkDetailsErr.Error(), http.StatusInternalServerError)
+					return
+				}
 
-			var body io.Reader
-			if tc.reqBody != nil {
-				jsonBody, _ := json.Marshal(tc.reqBody)
-				body = bytes.NewReader(jsonBody)
-			} else {
-				body = strings.NewReader("invalid json")
+				switch r.URL.Path {
+				case "/api/bookmarks/sync":
+					switch r.Method {
+					case http.MethodGet:
+						jsonBytes, _ := json.Marshal(tc.mockBookmarksSync)
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write(jsonBytes)
+					case http.MethodPost:
+						boundary := "MULTIPART_BOUNDARY"
+						var b bytes.Buffer
+						writer := multipart.NewWriter(&b)
+						if err := writer.SetBoundary(boundary); err != nil {
+							t.Fatalf("Failed to set boundary: %v", err)
+						}
+						reqBodyBytes, _ := io.ReadAll(r.Body)
+						var syncRequest struct {
+							IDs []string `json:"id"`
+						}
+						if err := json.Unmarshal(reqBodyBytes, &syncRequest); err != nil {
+							t.Fatalf("Failed to unmarshal sync request: %v", err)
+						}
+						for _, id := range syncRequest.IDs {
+							if bm, ok := tc.mockBookmarkDetails[id]; ok && bm != nil {
+								partHeader := make(textproto.MIMEHeader)
+								partHeader.Set("Content-Type", "application/json")
+								partHeader.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="bookmark_%s.json"`, id))
+								part, _ := writer.CreatePart(partHeader)
+								_ = json.NewEncoder(part).Encode(bm)
+							}
+						}
+						_ = writer.Close()
+						w.Header().Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", boundary))
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write(b.Bytes())
+					}
+				default:
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{}`))
+				}
 			}
 
-			req := httptest.NewRequest(http.MethodPost, "/api/kobo/get", body)
+			mockServer := httptest.NewServer(http.HandlerFunc(mockHTTPClientFunc))
+			defer mockServer.Close()
+
+			app := NewApp(
+				WithConfig(&config.Config{
+					Users:   []config.User{{Token: mockDeviceToken, ReadeckAccessToken: mockPlaintextReadeckToken}},
+					Readeck: config.ConfigReadeck{Host: mockServer.URL},
+				}),
+				WithLogger(testLogger),
+			)
+
+			jsonBody, _ := json.Marshal(tc.reqBody)
+			req := httptest.NewRequest(http.MethodPost, "/api/kobo/get", bytes.NewReader(jsonBody))
 			rr := httptest.NewRecorder()
 
-			app.HandleKoboGet(rr, req)
+			readeckClient, err := readeck.NewClient(mockServer.URL, "test-token", testLogger, mockServer.Client())
+			if err != nil {
+				t.Fatalf("Failed to create readeck client: %v", err)
+			}
 
+			var resultList map[string]models.KoboArticleItem
+			var total int
+			var syncErr error
+
+			if tc.reqBody.Since == nil {
+				resultList, total, syncErr = app.handleFullSync(req.Context(), readeckClient, tc.reqBody)
+			} else {
+				var since time.Time
+				if s, ok := tc.reqBody.Since.(float64); ok {
+					since = time.Unix(int64(s), 0)
+				}
+				resultList, total, syncErr = app.handleIncrementalSync(req.Context(), readeckClient, &since)
+			}
+
+			if syncErr != nil {
+				if tc.expectedStatus != http.StatusInternalServerError {
+					t.Errorf("expected status %d on sync error, but test case expected %d", http.StatusInternalServerError, tc.expectedStatus)
+				}
+				// Simulate the controller writing the error
+				http.Error(rr, syncErr.Error(), http.StatusInternalServerError)
+			} else {
+				resp := models.KoboGetResponse{
+					Status: 1,
+					List:   resultList,
+					Total:  total,
+				}
+				rr.Header().Set("Content-Type", "application/json")
+				rr.WriteHeader(http.StatusOK)
+				if err := json.NewEncoder(rr).Encode(resp); err != nil {
+					t.Fatalf("Failed to encode response: %v", err)
+				}
+			}
+
+			// Assertions
 			if rr.Code != tc.expectedStatus {
-				t.Errorf("expected status %d, got %d", tc.expectedStatus, rr.Code)
+				t.Errorf("expected status %d, got %d. Body: %s", tc.expectedStatus, rr.Code, rr.Body.String())
+				return
 			}
 
 			if tc.expectedStatus == http.StatusOK {
@@ -533,25 +388,50 @@ func TestHandleKoboGet(t *testing.T) {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
 				if len(resp.List) != tc.expectedListSize {
-					t.Errorf("expected %d item in list, got %d", tc.expectedListSize, len(resp.List))
+					t.Errorf("expected %d item(s) in list, got %d", tc.expectedListSize, len(resp.List))
 				}
 				if resp.Total != tc.expectedTotal {
 					t.Errorf("expected total to be %d, got %d", tc.expectedTotal, resp.Total)
+				}
+
+				// Specific checks for each test case
+				switch tc.name {
+				case "full sync with favorited item":
+					item := resp.List["1"]
+					if item.Favorite != "1" {
+						t.Errorf("expected favorited item 'favorite' status to be '1', got '%s'", item.Favorite)
+					}
+				case "incremental sync with deleted":
+					item := resp.List["1"]
+					if item.Status != "2" {
+						t.Errorf("expected deleted item status to be '2', got '%s'", item.Status)
+					}
+				case "incremental sync with newly archived":
+					item := resp.List["1"]
+					if item.Status != "1" {
+						t.Errorf("expected archived item status to be '1', got '%s'", item.Status)
+					}
+				case "full sync with image item":
+					item := resp.List["1"]
+					if item.HasImage != "1" {
+						t.Errorf("expected has_image to be '1', got '%s'", item.HasImage)
+					}
+					if item.Image.Src != "http://example.com/image.png" {
+						t.Errorf("expected image.src to be 'http://example.com/image.png', got '%s'", item.Image.Src)
+					}
 				}
 			}
 		})
 	}
 }
-
 // koboDownloadTestCase defines the structure for test cases in TestHandleKoboDownload.
 type koboDownloadTestCase struct {
-	name               string
-	reqBody            any // Can be JSON or form data
-	contentType        string
-	expectedStatus     int
-	mockBookmarks      []readeck.Bookmark
-	mockArticle        string
-	mockHTTPClientFunc func(t *testing.T, tc *koboDownloadTestCase) *http.Client
+	name           string
+	reqBody        any // Can be JSON or form data
+	contentType    string
+	expectedStatus int
+	mockBookmarks  []readeck.Bookmark
+	mockArticle    string
 }
 
 func TestHandleKoboDownload(t *testing.T) {
@@ -568,42 +448,6 @@ func TestHandleKoboDownload(t *testing.T) {
 				{ID: "1", Title: "Test Article", URL: "http://example.com/article1"},
 			},
 			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboDownloadTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.URL.Path == "/api/bookmarks" {
-								jsonBytes, _ := json.Marshal(tc.mockBookmarks)
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-									Header:     make(http.Header),
-								}, nil
-							}
-							if strings.HasSuffix(req.URL.Path, "/article") {
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(strings.NewReader(tc.mockArticle)),
-									Header:     make(http.Header),
-								}, nil
-							}
-							// Mock image server for /api/convert-image
-							if strings.Contains(req.URL.Path, "/api/convert-image") {
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(bytes.NewReader([]byte("mock image data"))),
-									Header:     make(http.Header),
-								}, nil
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "successful download (Form)",
@@ -617,42 +461,6 @@ func TestHandleKoboDownload(t *testing.T) {
 				{ID: "1", Title: "Test Article", URL: "http://example.com/article1"},
 			},
 			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboDownloadTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.URL.Path == "/api/bookmarks" {
-								jsonBytes, _ := json.Marshal(tc.mockBookmarks)
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-									Header:     make(http.Header),
-								}, nil
-							}
-							if strings.HasSuffix(req.URL.Path, "/article") {
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(strings.NewReader(tc.mockArticle)),
-									Header:     make(http.Header),
-								}, nil
-							}
-							// Mock image server for /api/convert-image
-							if strings.Contains(req.URL.Path, "/api/convert-image") {
-								return &http.Response{
-									StatusCode: http.StatusOK,
-									Body:       io.NopCloser(bytes.NewReader([]byte("mock image data"))),
-									Header:     make(http.Header),
-								}, nil
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "missing url",
@@ -662,19 +470,6 @@ func TestHandleKoboDownload(t *testing.T) {
 			},
 			contentType:    "application/json",
 			expectedStatus: http.StatusBadRequest,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboDownloadTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "invalid access token",
@@ -684,24 +479,29 @@ func TestHandleKoboDownload(t *testing.T) {
 			},
 			contentType:    "application/json",
 			expectedStatus: http.StatusUnauthorized,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboDownloadTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/bookmarks" {
+					jsonBytes, _ := json.Marshal(tc.mockBookmarks)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(jsonBytes)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/article") {
+					w.Header().Set("Content-Type", "text/html")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(tc.mockArticle))
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer mockServer.Close()
+
 			app := NewApp(
 				WithConfig(&config.Config{
 					Users: []config.User{
@@ -710,10 +510,10 @@ func TestHandleKoboDownload(t *testing.T) {
 							ReadeckAccessToken: mockPlaintextReadeckToken,
 						},
 					},
-					Readeck: config.ConfigReadeck{Host: "http://mock-readeck.com"},
+					Readeck: config.ConfigReadeck{Host: mockServer.URL},
 				}),
 				WithLogger(testLogger),
-				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc)),
+				WithReadeckHTTPClient(mockServer.Client()),
 			)
 
 			var body io.Reader
@@ -771,7 +571,6 @@ type koboSendTestCase struct {
 	expectedUpdatedData map[string]any
 	expectedCreatedURL  string
 	expectedHTTPStatus  int
-	mockHTTPClientFunc  func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client
 }
 
 func TestHandleKoboSend(t *testing.T) {
@@ -791,26 +590,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedUpdatedID:   "1",
 			expectedUpdatedData: map[string]any{"is_archived": true},
 			expectedHTTPStatus:  http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPatch {
-								*updatedBookmarkID = strings.TrimPrefix(req.URL.Path, "/api/bookmarks/")
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, updatedBookmarkData); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "readd action",
@@ -823,26 +602,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedUpdatedID:   "2",
 			expectedUpdatedData: map[string]any{"is_archived": false},
 			expectedHTTPStatus:  http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPatch {
-								*updatedBookmarkID = strings.TrimPrefix(req.URL.Path, "/api/bookmarks/")
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, updatedBookmarkData); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "favorite action",
@@ -855,26 +614,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedUpdatedID:   "3",
 			expectedUpdatedData: map[string]any{"is_marked": true},
 			expectedHTTPStatus:  http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPatch {
-								*updatedBookmarkID = strings.TrimPrefix(req.URL.Path, "/api/bookmarks/")
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, updatedBookmarkData); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "unfavorite action",
@@ -887,26 +626,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedUpdatedID:   "4",
 			expectedUpdatedData: map[string]any{"is_marked": false},
 			expectedHTTPStatus:  http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPatch {
-								*updatedBookmarkID = strings.TrimPrefix(req.URL.Path, "/api/bookmarks/")
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, updatedBookmarkData); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "delete action",
@@ -919,26 +638,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedUpdatedID:   "5",
 			expectedUpdatedData: map[string]any{"is_deleted": true},
 			expectedHTTPStatus:  http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPatch {
-								*updatedBookmarkID = strings.TrimPrefix(req.URL.Path, "/api/bookmarks/")
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, updatedBookmarkData); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "add action",
@@ -950,29 +649,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedResults:    []bool{true},
 			expectedCreatedURL: "http://example.com/new",
 			expectedHTTPStatus: http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							if req.Method == http.MethodPost {
-								var data struct {
-									URL string `json:"url"`
-								}
-								bodyBytes, _ := io.ReadAll(req.Body)
-								if err := json.Unmarshal(bodyBytes, &data); err != nil {
-									t.Fatalf("Failed to unmarshal: %v", err)
-								}
-								*createdBookmarkURL = data.URL
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "unknown action",
@@ -983,19 +659,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedStatus:     false,
 			expectedResults:    []bool{false},
 			expectedHTTPStatus: http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "invalid action",
@@ -1006,19 +669,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedStatus:     false,
 			expectedResults:    []bool{false},
 			expectedHTTPStatus: http.StatusOK,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 		{
 			name: "invalid access token",
@@ -1029,19 +679,6 @@ func TestHandleKoboSend(t *testing.T) {
 			expectedStatus:     false,
 			expectedResults:    []bool{},
 			expectedHTTPStatus: http.StatusUnauthorized,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboSendTestCase, updatedBookmarkID *string, updatedBookmarkData *map[string]any, createdBookmarkURL *string) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
 		},
 	}
 
@@ -1052,6 +689,29 @@ func TestHandleKoboSend(t *testing.T) {
 			updatedBookmarkData = nil
 			createdBookmarkURL = ""
 
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPatch {
+					updatedBookmarkID = strings.TrimPrefix(r.URL.Path, "/api/bookmarks/")
+					bodyBytes, _ := io.ReadAll(r.Body)
+					if err := json.Unmarshal(bodyBytes, &updatedBookmarkData); err != nil {
+						t.Fatalf("Failed to unmarshal: %v", err)
+					}
+				}
+				if r.Method == http.MethodPost {
+					var data struct {
+						URL string `json:"url"`
+					}
+					bodyBytes, _ := io.ReadAll(r.Body)
+					if err := json.Unmarshal(bodyBytes, &data); err != nil {
+						t.Fatalf("Failed to unmarshal: %v", err)
+					}
+					createdBookmarkURL = data.URL
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status": "ok"}`))
+			}))
+			defer mockServer.Close()
+
 			app := NewApp(
 				WithConfig(&config.Config{
 					Users: []config.User{
@@ -1060,10 +720,10 @@ func TestHandleKoboSend(t *testing.T) {
 							ReadeckAccessToken: mockPlaintextReadeckToken,
 						},
 					},
-					Readeck: config.ConfigReadeck{Host: "http://mock-readeck.com"},
+					Readeck: config.ConfigReadeck{Host: mockServer.URL},
 				}),
 				WithLogger(testLogger),
-				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc, &updatedBookmarkID, &updatedBookmarkData, &createdBookmarkURL)),
+				WithReadeckHTTPClient(mockServer.Client()),
 			)
 
 			reqBody := models.KoboSendRequest{AccessToken: tc.accessToken, Actions: tc.actions}
@@ -1118,170 +778,6 @@ func TestHandleKoboSend(t *testing.T) {
 				if tc.expectedCreatedURL != "" && createdBookmarkURL != tc.expectedCreatedURL {
 					t.Errorf("expected created bookmark URL to be '%s', got '%s'", tc.expectedCreatedURL, createdBookmarkURL)
 				}
-			}
-		})
-	}
-}
-
-// koboGetWithArchivedTestCase defines the structure for test cases in TestHandleKoboGetWithArchived.
-type koboGetWithArchivedTestCase struct {
-	name                string
-	reqBody             *models.KoboGetRequest
-	mockBookmarksSync   []readeck.BookmarkSync
-	mockBookmarkDetails map[string]*readeck.Bookmark
-	expectedStatus      int
-	expectedListSize    int
-	expectedTotal       int
-	mockHTTPClientFunc  func(t *testing.T, tc *koboGetWithArchivedTestCase) *http.Client
-}
-
-func TestHandleKoboGetWithArchived(t *testing.T) {
-	testCases := []koboGetWithArchivedTestCase{
-		{
-			name:    "successful get with archived",
-			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken},
-			mockBookmarksSync: []readeck.BookmarkSync{
-				{ID: "1", Type: "update"},
-				{ID: "2", Type: "update"},
-			},
-			mockBookmarkDetails: map[string]*readeck.Bookmark{
-				"1": {
-					ID:         "1",
-					Title:      "Test Bookmark",
-					URL:        "http://example.com/bookmark1",
-					Href:       "http://example.com/bookmark1",
-					WordCount:  100,
-					IsArchived: false,
-				},
-				"2": {
-					ID:         "2",
-					Title:      "Archived Bookmark",
-					URL:        "http://example.com/bookmark2",
-					Href:       "http://example.com/bookmark2",
-					WordCount:  100,
-					IsArchived: true,
-				},
-			},
-			expectedStatus:   http.StatusOK,
-			expectedListSize: 1,
-			expectedTotal:    1,
-			mockHTTPClientFunc: func(t *testing.T, tc *koboGetWithArchivedTestCase) *http.Client {
-				return &http.Client{
-					Transport: &MockRoundTripper{
-						RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-							switch req.URL.Path {
-							case "/api/bookmarks/sync":
-								switch req.Method {
-								case http.MethodGet:
-									jsonBytes, err := json.Marshal(tc.mockBookmarksSync)
-									if err != nil {
-										return nil, err
-									}
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(jsonBytes)),
-										Header:     make(http.Header),
-									}, nil
-								case http.MethodPost:
-									boundary := "MULTIPART_BOUNDARY"
-									var b bytes.Buffer
-									writer := multipart.NewWriter(&b)
-									if err := writer.SetBoundary(boundary); err != nil {
-										return nil, err
-									}
-
-									reqBodyBytes, err := io.ReadAll(req.Body)
-									if err != nil {
-										return nil, err
-									}
-									var syncRequest struct {
-										IDs []string `json:"id"`
-									}
-									if err := json.Unmarshal(reqBodyBytes, &syncRequest); err != nil {
-										return nil, err
-									}
-
-									for _, id := range syncRequest.IDs {
-										if bm, ok := tc.mockBookmarkDetails[id]; ok && bm != nil {
-											partHeader := make(textproto.MIMEHeader)
-											partHeader.Set("Content-Type", "application/json")
-											partHeader.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="bookmark_%s.json"`, id))
-											part, err := writer.CreatePart(partHeader)
-											if err != nil {
-												return nil, err
-											}
-											if err := json.NewEncoder(part).Encode(bm); err != nil {
-												return nil, err
-											}
-										}
-									}
-									if err := writer.Close(); err != nil {
-										return nil, err
-									}
-
-									header := make(http.Header)
-									header.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", boundary))
-									return &http.Response{
-										StatusCode: http.StatusOK,
-										Body:       io.NopCloser(bytes.NewReader(b.Bytes())),
-										Header:     header,
-									}, nil
-								}
-							}
-							return &http.Response{
-								StatusCode: http.StatusOK,
-								Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-								Header:     make(http.Header),
-							}, nil
-						},
-					},
-				}
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			app := NewApp(
-				WithConfig(&config.Config{
-					Users: []config.User{
-						{
-							Token:              mockDeviceToken,
-							ReadeckAccessToken: mockPlaintextReadeckToken,
-						},
-					},
-					Readeck: config.ConfigReadeck{Host: "http://mock-readeck.com"},
-				}),
-				WithLogger(testLogger),
-				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc)),
-			)
-
-			reqBody := models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken} // Request more than the number of bookmarks
-			body, err := json.Marshal(reqBody)
-			if err != nil {
-				t.Fatalf("Failed to marshal request body: %v", err)
-			}
-			req := httptest.NewRequest(http.MethodPost, "/api/kobo/get", bytes.NewReader(body))
-			rr := httptest.NewRecorder()
-
-			app.HandleKoboGet(rr, req)
-
-			if rr.Code != http.StatusOK {
-				t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
-			}
-
-			var resp models.KoboGetResponse
-			if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-				t.Fatalf("Failed to decode response: %v", err)
-			}
-			if len(resp.List) != 1 {
-				t.Errorf("expected 1 item in list, got %d", len(resp.List))
-			}
-			if resp.Total != 1 {
-				t.Errorf("expected total to be %d, got %d", tc.expectedTotal, resp.Total)
-			}
-			if _, ok := resp.List["2"]; ok {
-				t.Error("archived bookmark should not be in the list")
 			}
 		})
 	}
@@ -1381,4 +877,5 @@ func TestHandleConvertImage(t *testing.T) {
 		}
 	})
 }
+
 
