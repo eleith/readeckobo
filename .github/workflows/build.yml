@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - "*.*.*"
+      - "v*.*.*"
     paths:
       - "**/*.go"
       - "**/*.gohtml"
@@ -47,7 +47,9 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
