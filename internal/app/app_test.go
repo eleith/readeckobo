@@ -16,6 +16,7 @@ import (
 
 	"readeckobo/internal/config"
 	"readeckobo/internal/logger"
+	"readeckobo/internal/models"
 	"readeckobo/internal/readeck"
 )
 
@@ -162,7 +163,7 @@ func TestCompareURLs(t *testing.T) {
 
 type koboGetTestCase struct {
 	name                   string
-	reqBody                *GetRequest
+	reqBody                *models.KoboGetRequest
 	mockBookmarksSync      []readeck.BookmarkSync
 	mockBookmarkDetails    map[string]*readeck.Bookmark
 	mockBookmarksSyncErr   error
@@ -177,7 +178,7 @@ func TestHandleKoboGet(t *testing.T) {
 	testCases := []koboGetTestCase{
 		{
 			name:    "successful get",
-			reqBody: &GetRequest{Count: "1", AccessToken: mockDeviceToken},
+			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 			},
@@ -260,7 +261,7 @@ func TestHandleKoboGet(t *testing.T) {
 		},
 		{
 			name:    "delete sync type",
-			reqBody: &GetRequest{Count: "1", AccessToken: mockDeviceToken},
+			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "delete"},
 			},
@@ -314,7 +315,7 @@ func TestHandleKoboGet(t *testing.T) {
 		},
 		{
 			name:    "get bookmark details error",
-			reqBody: &GetRequest{Count: "1", AccessToken: mockDeviceToken},
+			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 			},
@@ -352,7 +353,7 @@ func TestHandleKoboGet(t *testing.T) {
 		},
 		{
 			name:    "get bookmark details nil",
-			reqBody: &GetRequest{Count: "1", AccessToken: mockDeviceToken},
+			reqBody: &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 			},
@@ -432,7 +433,7 @@ func TestHandleKoboGet(t *testing.T) {
 		},
 		{
 			name:                 "get bookmarks sync error",
-			reqBody:              &GetRequest{Count: "1", AccessToken: mockDeviceToken},
+			reqBody:              &models.KoboGetRequest{Count: "1", AccessToken: mockDeviceToken},
 			mockBookmarksSyncErr: fmt.Errorf("sync error"),
 			expectedStatus:       http.StatusInternalServerError,
 			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
@@ -475,7 +476,7 @@ func TestHandleKoboGet(t *testing.T) {
 		},
 		{
 			name:           "invalid access token",
-			reqBody:        &GetRequest{Count: "1", AccessToken: "invalid-device-token"},
+			reqBody:        &models.KoboGetRequest{Count: "1", AccessToken: "invalid-device-token"},
 			expectedStatus: http.StatusUnauthorized,
 			mockHTTPClientFunc: func(t *testing.T, tc *koboGetTestCase) *http.Client {
 				return &http.Client{
@@ -527,7 +528,7 @@ func TestHandleKoboGet(t *testing.T) {
 			}
 
 			if tc.expectedStatus == http.StatusOK {
-				var resp KoboGetResponse
+				var resp models.KoboGetResponse
 				if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -557,7 +558,7 @@ func TestHandleKoboDownload(t *testing.T) {
 	testCases := []koboDownloadTestCase{
 		{
 			name: "successful download (JSON)",
-			reqBody: DownloadRequest{
+			reqBody: models.KoboDownloadRequest{
 				AccessToken: mockDeviceToken,
 				URL:         "http://example.com/article1",
 			},
@@ -655,7 +656,7 @@ func TestHandleKoboDownload(t *testing.T) {
 		},
 		{
 			name: "missing url",
-			reqBody: DownloadRequest{
+			reqBody: models.KoboDownloadRequest{
 				AccessToken: mockDeviceToken,
 				URL:         "",
 			},
@@ -677,7 +678,7 @@ func TestHandleKoboDownload(t *testing.T) {
 		},
 		{
 			name: "invalid access token",
-			reqBody: DownloadRequest{
+			reqBody: models.KoboDownloadRequest{
 				AccessToken: "invalid-device-token",
 				URL:         "http://example.com/article1",
 			},
@@ -1065,7 +1066,7 @@ func TestHandleKoboSend(t *testing.T) {
 				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc, &updatedBookmarkID, &updatedBookmarkData, &createdBookmarkURL)),
 			)
 
-			reqBody := SendRequest{AccessToken: tc.accessToken, Actions: tc.actions}
+			reqBody := models.KoboSendRequest{AccessToken: tc.accessToken, Actions: tc.actions}
 			body, err := json.Marshal(reqBody)
 			if err != nil {
 				t.Fatalf("Failed to marshal request body: %v", err)
@@ -1125,7 +1126,7 @@ func TestHandleKoboSend(t *testing.T) {
 // koboGetWithArchivedTestCase defines the structure for test cases in TestHandleKoboGetWithArchived.
 type koboGetWithArchivedTestCase struct {
 	name                string
-	reqBody             *GetRequest
+	reqBody             *models.KoboGetRequest
 	mockBookmarksSync   []readeck.BookmarkSync
 	mockBookmarkDetails map[string]*readeck.Bookmark
 	expectedStatus      int
@@ -1138,7 +1139,7 @@ func TestHandleKoboGetWithArchived(t *testing.T) {
 	testCases := []koboGetWithArchivedTestCase{
 		{
 			name:    "successful get with archived",
-			reqBody: &GetRequest{Count: "10", AccessToken: mockDeviceToken},
+			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken},
 			mockBookmarksSync: []readeck.BookmarkSync{
 				{ID: "1", Type: "update"},
 				{ID: "2", Type: "update"},
@@ -1255,7 +1256,7 @@ func TestHandleKoboGetWithArchived(t *testing.T) {
 				WithReadeckHTTPClient(tc.mockHTTPClientFunc(t, &tc)),
 			)
 
-			reqBody := GetRequest{Count: "10", AccessToken: mockDeviceToken} // Request more than the number of bookmarks
+			reqBody := models.KoboGetRequest{Count: "10", AccessToken: mockDeviceToken} // Request more than the number of bookmarks
 			body, err := json.Marshal(reqBody)
 			if err != nil {
 				t.Fatalf("Failed to marshal request body: %v", err)
@@ -1269,7 +1270,7 @@ func TestHandleKoboGetWithArchived(t *testing.T) {
 				t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
 			}
 
-			var resp KoboGetResponse
+			var resp models.KoboGetResponse
 			if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 				t.Fatalf("Failed to decode response: %v", err)
 			}

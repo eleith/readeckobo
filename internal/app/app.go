@@ -23,6 +23,7 @@ import (
 	"golang.org/x/net/html"
 	"readeckobo/internal/config"
 	"readeckobo/internal/logger"
+	"readeckobo/internal/models"
 	"readeckobo/internal/readeck"
 )
 
@@ -74,25 +75,9 @@ func WithReadeckHTTPClient(client *http.Client) Option {
 	}
 }
 
-// GetRequest represents the incoming request for /api/kobo/get
-type GetRequest struct {
-	AccessToken string     `json:"access_token"`
-	ConsumerKey string     `json:"consumer_key"`
-	ContentType string     `json:"contentType"`
-	Count       string     `json:"count"`
-	DetailType  string     `json:"detailType"`
-	Offset      string     `json:"offset"`
-	State       string     `json:"state"`
-	Total       string     `json:"total"`
-	Since       any `json:"since"`
-}
 
-// KoboGetResponse represents the outgoing response for /api/kobo/get
-type KoboGetResponse struct {
-	Status int            `json:"status"`
-	List   map[string]any `json:"list"`
-	Total  int            `json:"total"`
-}
+
+
 
 	// HandleKoboGet handles the /api/kobo/get endpoint.
 func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +99,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req GetRequest
+	var req models.KoboGetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		a.Logger.Errorf("Error decoding /api/kobo/get request: %v, body: %s, URL: %s, Params: %v", err, string(bodyBytes), r.URL.Path, r.URL.Query())
@@ -288,7 +273,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		resultList[bm["item_id"].(string)] = bm
 	}
 
-	resp := KoboGetResponse{
+	resp := models.KoboGetResponse{
 		Status: 1,
 		List:   resultList,
 		Total:  totalNonArchivedBookmarks, // Total number of non-archived bookmarks
@@ -300,15 +285,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Errorf("Error encoding response for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 	}
 }
-// DownloadRequest represents the incoming request for /api/kobo/download
-type DownloadRequest struct {
-	AccessToken string `json:"access_token"`
-	ConsumerKey string `json:"consumer_key"`
-	Images      int    `json:"images"`
-	Refresh     int    `json:"refresh"`
-	Output      string `json:"output"`
-	URL         string `json:"url"`
-}
+
 
 // HandleKoboDownload handles the /api/kobo/download endpoint.
 func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +307,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req DownloadRequest
+	var req models.KoboDownloadRequest
 	// Use the restored body for decoding.
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
 		// If JSON decoding fails, try form parsing (Kobo devices might send form data for download)
@@ -514,24 +491,7 @@ func getSitesToTry(host string) []string {
 	return uniqueSites
 }
 
-// ExistingItemAction represents an action on an existing item.
-type ExistingItemAction struct {
-	Action string `json:"action"`
-	ItemID string `json:"item_id"`
-}
 
-// NewItemAction represents an action to create a new item.
-type NewItemAction struct {
-	Action string `json:"action"`
-	URL    string `json:"url"`
-}
-
-// SendRequest represents the incoming request for /api/kobo/send
-type SendRequest struct {
-	AccessToken string `json:"access_token"`
-	ConsumerKey string `json:"consumer_key"`
-	Actions     []any  `json:"actions"`
-}
 
 // HandleKoboSend handles the /api/kobo/send endpoint.
 func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
@@ -553,7 +513,7 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req SendRequest
+	var req models.KoboSendRequest
 	// Use the restored body for decoding.
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
