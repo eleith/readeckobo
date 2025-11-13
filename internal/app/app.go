@@ -114,10 +114,10 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+	readeckClient, err := a.newReadeckClient(readeckToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -338,10 +338,10 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a new Readeck client with the looked-up token for this request
-	readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+	readeckClient, err := a.newReadeckClient(readeckToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -535,9 +535,9 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		}
 	
 			// Create a new Readeck client with the looked-up token for this request
-			readeckClient, err := readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
+			readeckClient, err := a.newReadeckClient(readeckToken)
 			if err != nil {		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client with looked-up token for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
 		return
 	}
 
@@ -703,6 +703,11 @@ func (a *App) getReadeckToken(deviceToken string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unauthorized device token")
+}
+
+// newReadeckClient creates a new Readeck client with the application's configuration and logger.
+func (a *App) newReadeckClient(readeckToken string) (*readeck.Client, error) {
+	return readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
 }
 
 // HandleDumpAndForward handles the dump and forward endpoint.
