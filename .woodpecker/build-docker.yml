@@ -3,7 +3,7 @@ workspace:
   path: app
 
 when:
-  - event: [push, tag]
+  - event: push
     branch: main
     path:
       include:
@@ -14,6 +14,8 @@ when:
       exclude:
         - "**/*.md"
       on_empty: true
+  - event: tag
+    ref: "refs/tags/v*.*.*"
 
 steps:
   vendor:
@@ -29,16 +31,56 @@ steps:
     image: golang:1.24.5-alpine
     commands:
       - ./scripts/check-coverage.sh 60
-  build-docker:
+
+  extract-semver-tags:
+    image: alpine/git:latest # A small image with git and shell tools
+    commands:
+      - |
+        VERSION_FULL="${CI_COMMIT_TAG#v}"
+        VERSION_MAJOR=$(echo "$VERSION_FULL" | cut -d. -f1)
+        VERSION_MINOR=$(echo "$VERSION_FULL" | cut -d. -f2)
+        
+        echo "Extracted versions: Full=$VERSION_FULL, Major=$VERSION_MAJOR, Minor=$VERSION_MINOR"
+        
+        export SEMVER_FULL="$VERSION_FULL"
+        export SEMVER_MAJOR_MINOR="${VERSION_MAJOR}.${VERSION_MINOR}"
+        export SEMVER_MAJOR="$VERSION_MAJOR"
+    when:
+      - event: tag
+        ref: "refs/tags/v*.*.*"
+
+  build-docker-main:
     image: woodpeckerci/plugin-docker-buildx:6.0.1
     settings:
       repo: git.eleith.com/eleith.private/readeckobo
       username: eleith
       dockerfile: Dockerfile
       registry: https://git.eleith.com
-      auto_tag: true
       password:
         from_secret: gitea_docker_registry
+      tags:
+        - latest
+    when:
+      - event: push
+        branch: main
+
+  build-docker-tag:
+    image: woodpeckerci/plugin-docker-buildx:6.0.1
+    settings:
+      repo: git.eleith.com/eleith.private/readeckobo
+      username: eleith
+      dockerfile: Dockerfile
+      registry: https://git.eleith.com
+      password:
+        from_secret: gitea_docker_registry
+      tags:
+        - "${SEMVER_FULL}"
+        - "${SEMVER_MAJOR_MINOR}"
+        - "${SEMVER_MAJOR}"
+    when:
+      - event: tag
+        ref: "refs/tags/v*.*.*"
+
   notify-success:
     image: deblan/woodpecker-email:3.2.0
     settings:
