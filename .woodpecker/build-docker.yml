@@ -33,24 +33,25 @@ steps:
       - ./scripts/check-coverage.sh 60
 
   extract-semver-tags:
-    image: alpine/git:latest # A small image with git and shell tools
+    image: alpine/git:latest
     commands:
       - |
         VERSION_FULL="${CI_COMMIT_TAG#v}"
         VERSION_MAJOR=$(echo "$VERSION_FULL" | cut -d. -f1)
         VERSION_MINOR=$(echo "$VERSION_FULL" | cut -d. -f2)
-        
-        echo "Extracted versions: Full=$VERSION_FULL, Major=$VERSION_MAJOR, Minor=$VERSION_MINOR"
-        
-        export SEMVER_FULL="$VERSION_FULL"
-        export SEMVER_MAJOR_MINOR="${VERSION_MAJOR}.${VERSION_MINOR}"
-        export SEMVER_MAJOR="$VERSION_MAJOR"
+
+        SEMVER_FULL="$VERSION_FULL"
+        SEMVER_MAJOR_MINOR="$VERSION_MAJOR.$VERSION_MINOR"
+        SEMVER_MAJOR="$VERSION_MAJOR"
+
+        echo "Extracted versions: $SEMVER_FULL, $SEMVER_MAJOR_MINOR, $SEMVER_MAJOR, "
+        echo -e "$SEMVER_FULL\n$SEMVER_MAJOR\n$SEMVER_MAJOR_MINOR" >> .tags
+        cat .tags
     when:
       - event: tag
-        ref: "refs/tags/v*.*.*"
 
   build-docker-main:
-    image: woodpeckerci/plugin-docker-buildx:6.0.1
+    image: woodpeckerci/plugin-docker-buildx:6.0.3
     settings:
       repo: git.eleith.com/eleith.private/readeckobo
       username: eleith
@@ -65,7 +66,7 @@ steps:
         branch: main
 
   build-docker-tag:
-    image: woodpeckerci/plugin-docker-buildx:6.0.1
+    image: woodpeckerci/plugin-docker-buildx:6.0.3
     settings:
       repo: git.eleith.com/eleith.private/readeckobo
       username: eleith
@@ -73,10 +74,7 @@ steps:
       registry: https://git.eleith.com
       password:
         from_secret: gitea_docker_registry
-      tags:
-        - "${SEMVER_FULL}"
-        - "${SEMVER_MAJOR_MINOR}"
-        - "${SEMVER_MAJOR}"
+      tags_file: .tags
     when:
       - event: tag
         ref: "refs/tags/v*.*.*"
