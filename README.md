@@ -3,8 +3,9 @@
 This tool acts as an Instapaper proxy, so your Kobo can sync with your
 [Readeck](https://readeck.com) articles.
 
-This is a Go port of the original [kobeck](https://github.com/Lukas0907/kobeck),
-evolved to support multiple users, logging, performance improvements and more.
+This started as a Go port of [kobeck](https://github.com/Lukas0907/kobeck), and
+then evolved to support multiple users, logging, performance improvements and
+more.
 
 ## ✨ Features
 
