@@ -23,6 +23,8 @@ Getting up and running is a breeze with Docker.
 
 First, copy `config.yaml.example` to `config.yaml` and edit it to match your setup.
 
+For a detailed explanation of all options and how to get your Readeck API token, see [docs/CONFIG.md](docs/CONFIG.md).
+
 ```yaml
 server:
   port: 8080

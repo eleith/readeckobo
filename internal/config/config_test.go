@@ -10,9 +10,11 @@ import (
 
 func TestLoad(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  map[string]any
-		wantErr bool
+		name        string
+		config      map[string]any
+		yamlContent string
+		noFile      bool
+		wantErr     bool
 	}{
 		{
 			name: "valid config",
@@ -104,6 +106,21 @@ func TestLoad(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name:    "file does not exist",
+			noFile:  true,
+			wantErr: true,
+		},
+		{
+			name:        "invalid yaml syntax",
+			yamlContent: "readeck: host: [unbalanced brackets",
+			wantErr:     true,
+		},
+		{
+			name:        "invalid yaml structure for unmarshal",
+			yamlContent: "readeck: \"should be a map but is a string\"",
+			wantErr:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -119,13 +136,21 @@ func TestLoad(t *testing.T) {
 			}()
 
 			configPath := filepath.Join(tmpDir, "config.yaml")
-			data, err := yaml.Marshal(tt.config)
-			if err != nil {
-				t.Fatalf("Failed to marshal test config: %v", err)
-			}
 
-			if err := os.WriteFile(configPath, data, 0644); err != nil {
-				t.Fatalf("Failed to write dummy config file: %v", err)
+			if !tt.noFile {
+				var data []byte
+				if tt.yamlContent != "" {
+					data = []byte(tt.yamlContent)
+				} else {
+					data, err = yaml.Marshal(tt.config)
+					if err != nil {
+						t.Fatalf("Failed to marshal test config: %v", err)
+					}
+				}
+
+				if err := os.WriteFile(configPath, data, 0644); err != nil {
+					t.Fatalf("Failed to write dummy config file: %v", err)
+				}
 			}
 
 			_, err = Load(configPath)

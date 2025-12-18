@@ -10,7 +10,6 @@ import (
 	"net/url" // Added this import
 	"strings"
 	"testing"
-	"time"
 
 	"mime/multipart"
 	"net/textproto"
@@ -332,49 +331,15 @@ func TestHandleKoboGet(t *testing.T) {
 					Readeck: config.ConfigReadeck{Host: mockServer.URL},
 				}),
 				WithLogger(testLogger),
+				WithReadeckHTTPClient(mockServer.Client()),
 			)
 
 			jsonBody, _ := json.Marshal(tc.reqBody)
 			req := httptest.NewRequest(http.MethodPost, "/api/kobo/get", bytes.NewReader(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
 
-			readeckClient, err := readeck.NewClient(mockServer.URL, "test-token", testLogger, mockServer.Client())
-			if err != nil {
-				t.Fatalf("Failed to create readeck client: %v", err)
-			}
-
-			var resultList map[string]models.KoboArticleItem
-			var total int
-			var syncErr error
-
-			if tc.reqBody.Since == nil {
-				resultList, total, syncErr = app.handleFullSync(req.Context(), readeckClient, tc.reqBody)
-			} else {
-				var since time.Time
-				if s, ok := tc.reqBody.Since.(float64); ok {
-					since = time.Unix(int64(s), 0)
-				}
-				resultList, total, syncErr = app.handleIncrementalSync(req.Context(), readeckClient, &since)
-			}
-
-			if syncErr != nil {
-				if tc.expectedStatus != http.StatusInternalServerError {
-					t.Errorf("expected status %d on sync error, but test case expected %d", http.StatusInternalServerError, tc.expectedStatus)
-				}
-				// Simulate the controller writing the error
-				http.Error(rr, syncErr.Error(), http.StatusInternalServerError)
-			} else {
-				resp := models.KoboGetResponse{
-					Status: 1,
-					List:   resultList,
-					Total:  total,
-				}
-				rr.Header().Set("Content-Type", "application/json")
-				rr.WriteHeader(http.StatusOK)
-				if err := json.NewEncoder(rr).Encode(resp); err != nil {
-					t.Fatalf("Failed to encode response: %v", err)
-				}
-			}
+			app.HandleKoboGet(rr, req)
 
 			// Assertions
 			if rr.Code != tc.expectedStatus {
