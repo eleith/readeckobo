@@ -3,11 +3,11 @@ FROM golang:1.24.5-alpine AS builder
 WORKDIR /app
 
 COPY go.mod go.sum ./
-COPY vendor/ ./vendor/
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 
+RUN go mod vendor
 RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -a -installsuffix cgo -o /app/readeckobo ./cmd/readeckobo
 
 FROM alpine:3.22.1
