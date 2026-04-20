@@ -12,7 +12,6 @@
 # Web archive
 /web/archive
 
-# Gemini CLI state
+# llm agents
 /.gemini/
-
-PROJECT.md
+/.claude/

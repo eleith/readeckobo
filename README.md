@@ -87,13 +87,14 @@ Follow the output from the script to configure your services.
     ```ini
     [OneStoreServices]
     api_endpoint=https://readeckobo.example.com/instapaper-proxy/storeapi
-    instapaper_env_url=https://readeckobo.example.com/instapaper-proxy/instapaper
+    instapaper_env_url=https://readeckobo.example.com
 
     [Instapaper]
     AccessToken=@ByteArray(<THE-ENCRYPTED-TOKEN-FROM-THE-SCRIPT>)
     ```
 
-Replace `readeckobo.example.com` with the hostname of your proxy instance.
+Replace `https://readeckobo.example.com` with the full path to where you are deploying
+the readeckobo service to
 
 ### 5. Set Up a Reverse Proxy
 
