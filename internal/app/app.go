@@ -714,6 +714,78 @@ func (a *App) newReadeckClient(readeckToken string) (*readeck.Client, error) {
 	return readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
 }
 
+func (a *App) HandleBookSync(w http.ResponseWriter, r *http.Request) {
+	deviceToken := r.PathValue("deviceToken")
+
+	upstream, ok := a.Config.ResolveBookSyncUpstream(deviceToken)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	target, err := url.Parse(upstream)
+	if err != nil {
+		a.Logger.Errorf("Error parsing book_sync endpoint %q: %v", upstream, err)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/booksync/"+deviceToken)
+	isInit := strings.HasSuffix(rest, "/v1/initialization")
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		req.URL.Path, req.URL.RawPath = rest, ""
+		originalDirector(req)
+		req.Host = target.Host
+		if isInit {
+			// So ModifyResponse below sees plaintext to rewrite.
+			req.Header.Set("Accept-Encoding", "identity")
+		}
+	}
+
+	if isInit {
+		base := a.instapaperBase(r)
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			if err := resp.Body.Close(); err != nil {
+				return err
+			}
+
+			body = bytes.ReplaceAll(body, []byte("https://www.instapaper.com"), []byte(base))
+
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			resp.Header.Del("Content-Encoding")
+			return nil
+		}
+	}
+
+	proxy.ServeHTTP(w, r)
+}
+
+func (a *App) instapaperBase(r *http.Request) string {
+	scheme := r.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		if r.TLS == nil {
+			scheme = "http"
+		} else {
+			scheme = "https"
+		}
+	}
+
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+
+	return scheme + "://" + host + "/instapaper-proxy/instapaper"
+}
+
 func (a *App) HandleDumpAndForward(w http.ResponseWriter, r *http.Request) {
 	a.Logger.Debugf("Dumping request from %s", r.RemoteAddr)
 	a.Logger.Debugf("Method: %s", r.Method)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url" // Added this import
+	"strconv"
 	"strings"
 	"testing"
 
@@ -839,6 +840,97 @@ func TestHandleConvertImage(t *testing.T) {
 		}
 		if rr.Header().Get("Content-Type") != "image/jpeg" {
 			t.Errorf("expected content type image/jpeg, got %s", rr.Header().Get("Content-Type"))
+		}
+	})
+}
+
+func TestHandleBookSync(t *testing.T) {
+	t.Run("unknown token returns 404", func(t *testing.T) {
+		app := NewApp(
+			WithConfig(&config.Config{
+				BookSync: true,
+				Users: []config.User{
+					{Token: "device-token", ReadeckAccessToken: "rt", BookServiceURL: "https://grimmory.example.com/api/kobo/g1"},
+				},
+			}),
+			WithLogger(testLogger),
+		)
+
+		req := httptest.NewRequest(http.MethodGet, "/booksync/unknown-token/v1/library/sync", nil)
+		req.SetPathValue("deviceToken", "unknown-token")
+		rr := httptest.NewRecorder()
+
+		app.HandleBookSync(rr, req)
+
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("expected status %d, got %d", http.StatusNotFound, rr.Code)
+		}
+	})
+
+	t.Run("non-initialization requests are proxied byte-for-byte", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/kobo/grimmory-token/v1/library/sync" {
+				t.Errorf("unexpected upstream path: %s", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"entries": []}`))
+		}))
+		defer upstream.Close()
+
+		app := NewApp(
+			WithConfig(&config.Config{
+				BookSync: true,
+				Users: []config.User{
+					{Token: "device-token", ReadeckAccessToken: "rt", BookServiceURL: upstream.URL + "/api/kobo/grimmory-token"},
+				},
+			}),
+			WithLogger(testLogger),
+		)
+
+		req := httptest.NewRequest(http.MethodGet, "/booksync/device-token/v1/library/sync", nil)
+		req.SetPathValue("deviceToken", "device-token")
+		rr := httptest.NewRecorder()
+
+		app.HandleBookSync(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+		}
+		if got := rr.Body.String(); got != `{"entries": []}` {
+			t.Errorf("expected passthrough body, got %q", got)
+		}
+	})
+
+	t.Run("initialization response has instapaper.com rewritten", func(t *testing.T) {
+		goldenBody := `{"instapaper":"https://www.instapaper.com"}`
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(goldenBody))
+		}))
+		defer upstream.Close()
+
+		app := NewApp(
+			WithConfig(&config.Config{
+				BookSync: true,
+				Users: []config.User{
+					{Token: "device-token", ReadeckAccessToken: "rt", BookServiceURL: upstream.URL + "/api/kobo/grimmory-token"},
+				},
+			}),
+			WithLogger(testLogger),
+		)
+
+		req := httptest.NewRequest(http.MethodGet, "/booksync/device-token/v1/initialization", nil)
+		req.Host = "readeckobo.example.com"
+		req.SetPathValue("deviceToken", "device-token")
+		rr := httptest.NewRecorder()
+
+		app.HandleBookSync(rr, req)
+
+		want := `{"instapaper":"http://readeckobo.example.com/instapaper-proxy/instapaper"}`
+		if got := rr.Body.String(); got != want {
+			t.Errorf("body = %q, want %q", got, want)
+		}
+		if got := rr.Header().Get("Content-Length"); got != strconv.Itoa(len(want)) {
+			t.Errorf("Content-Length = %q, want %q", got, strconv.Itoa(len(want)))
 		}
 	})
 }

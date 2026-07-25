@@ -116,6 +116,13 @@ ensure this connection is preserved.
 
 Without these rules, your Kobo will eventually lose its connection to `readeckobo`.
 
+## 📚 Optional: Syncing Books
+
+`readeckobo` can optionally double as a reverse proxy for a self-hosted book service such as
+[Grimmory](https://github.com/grimmory-tools/grimmory) or [Komga](https://komga.org), so a single
+Kobo device can sync both articles and books. This is opt-in and off by default — see the
+"Book Sync" section of [docs/CONFIG.md](docs/CONFIG.md) for configuration.
+
 ## 🔒 A Quick Word on Security
 
 A little security goes a long way.
