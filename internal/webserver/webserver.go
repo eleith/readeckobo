@@ -22,6 +22,10 @@ func ListenAndServe(port int, application *app.App, logger *logger.Logger) {
 	mux.HandleFunc("/api/convert-image", application.HandleConvertImage)
 	mux.HandleFunc("/instapaper-proxy/storeapi/v1/initialization", application.HandleDumpAndForward)
 
+	if application.Config.BookSync {
+		mux.HandleFunc("/booksync/{deviceToken}/", application.HandleBookSync)
+	}
+
 	// Catch-all for unimplemented routes
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Warnf("404 Not Found: URL=%s, Method=%s, Params=%v", r.URL.Path, r.Method, r.URL.Query())

@@ -28,3 +28,14 @@
                 proxy_set_header X-Forwarded-Proto $scheme;
                 proxy_set_header X-Forwarded-Prefix /instapaper-proxy/instapaper;
         }
+
+        # Optional: if you enable `book_sync` in config.yaml, use this instead of the
+        # /instapaper-proxy/storeapi* blocks above (see docs/CONFIG.md).
+        # location /booksync/ {
+        #         proxy_pass http://readeckobo-upstream;
+        #         proxy_set_header Host $host;
+        #         proxy_set_header X-Forwarded-Proto $scheme;
+        #         proxy_set_header X-Forwarded-Host $host;
+        #         client_max_body_size 128M;
+        #         proxy_buffer_size 128k;
+        # }

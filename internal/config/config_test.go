@@ -121,6 +121,39 @@ func TestLoad(t *testing.T) {
 			yamlContent: "readeck: \"should be a map but is a string\"",
 			wantErr:     true,
 		},
+		{
+			name: "valid config with book_sync",
+			config: map[string]any{
+				"readeck": map[string]any{
+					"host": "https://readeck.example.com",
+				},
+				"book_sync": true,
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+						"book_service_url":     "https://grimmory.example.com/api/kobo/grimmory-token",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid config book_sync enabled without any book_service_url",
+			config: map[string]any{
+				"readeck": map[string]any{
+					"host": "https://readeck.example.com",
+				},
+				"book_sync": true,
+				"users": []map[string]any{
+					{
+						"token":                "test-token",
+						"readeck_access_token": "test-readeck-token",
+					},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -158,6 +191,64 @@ func TestLoad(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Load() error = %v, wantErr %v", err, tt.wantErr)
 				return
+			}
+		})
+	}
+}
+
+func TestResolveBookSyncUpstream(t *testing.T) {
+	tests := []struct {
+		name         string
+		cfg          Config
+		deviceToken  string
+		wantUpstream string
+		wantOK       bool
+	}{
+		{
+			name: "disabled returns false even with a configured url",
+			cfg: Config{
+				BookSync: false,
+				Users: []User{
+					{Token: "t1", BookServiceURL: "https://grimmory.example.com/api/kobo/g1"},
+				},
+			},
+			deviceToken: "t1",
+			wantOK:      false,
+		},
+		{
+			name: "matching device token returns that user's endpoint",
+			cfg: Config{
+				BookSync: true,
+				Users: []User{
+					{Token: "t1", BookServiceURL: "https://grimmory.example.com/api/kobo/g1"},
+					{Token: "t2", BookServiceURL: "https://grimmory.example.com/api/kobo/g2"},
+				},
+			},
+			deviceToken:  "t2",
+			wantUpstream: "https://grimmory.example.com/api/kobo/g2",
+			wantOK:       true,
+		},
+		{
+			name: "unknown device token returns false",
+			cfg: Config{
+				BookSync: true,
+				Users: []User{
+					{Token: "t1", BookServiceURL: "https://grimmory.example.com/api/kobo/g1"},
+				},
+			},
+			deviceToken: "unknown-token",
+			wantOK:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotUpstream, gotOK := tt.cfg.ResolveBookSyncUpstream(tt.deviceToken)
+			if gotOK != tt.wantOK {
+				t.Errorf("ResolveBookSyncUpstream() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotUpstream != tt.wantUpstream {
+				t.Errorf("ResolveBookSyncUpstream() upstream = %q, want %q", gotUpstream, tt.wantUpstream)
 			}
 		})
 	}

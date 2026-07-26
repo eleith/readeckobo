@@ -14,6 +14,7 @@ import (
 type User struct {
 	Token              string `koanf:"token" validate:"required"`
 	ReadeckAccessToken string `koanf:"readeck_access_token" validate:"required"`
+	BookServiceURL     string `koanf:"book_service_url" validate:"omitempty,url"`
 }
 
 type ConfigReadeck struct {
@@ -27,12 +28,16 @@ type Config struct {
 	} `koanf:"server"`
 	Users    []User        `koanf:"users" validate:"required,min=1,dive"`
 	LogLevel string        `koanf:"log_level" validate:"oneof=error warn info debug"`
+	BookSync bool          `koanf:"book_sync"`
 }
 
 func (c *Config) Validate() error {
 	validate := validator.New()
 	err := validate.Struct(c)
 	if err == nil {
+		if c.BookSync && !c.hasBookServiceURL() {
+			return fmt.Errorf("configuration validation failed: book_sync is enabled but no user has book_service_url set")
+		}
 		return nil
 	}
 
@@ -42,6 +47,30 @@ func (c *Config) Validate() error {
 	}
 
 	return err
+}
+
+func (c *Config) hasBookServiceURL() bool {
+	for _, u := range c.Users {
+		if u.BookServiceURL != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c *Config) ResolveBookSyncUpstream(deviceToken string) (string, bool) {
+	if !c.BookSync {
+		return "", false
+	}
+
+	for _, u := range c.Users {
+		if u.Token == deviceToken && u.BookServiceURL != "" {
+			return u.BookServiceURL, true
+		}
+	}
+
+	return "", false
 }
 
 func Load(path string) (*Config, error) {
