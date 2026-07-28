@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
@@ -185,7 +185,7 @@ func (a *App) handleIncrementalSync(ctx context.Context, readeckClient *readeck.
 		entry.Favorite = favoriteStatus
 
 		if bookmark.IsArchived {
-			entry.Status = "1"
+			entry.Status = "2"
 		} else {
 			entry.Status = "0"
 			totalNonArchivedBookmarks++
@@ -339,6 +339,9 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	var req models.KoboDownloadRequest
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
+                sanitized := strings.ReplaceAll(string(bodyBytes), ";", "&")
+                r.Body = io.NopCloser(strings.NewReader(sanitized))
+                r.ContentLength = int64(len(sanitized))
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "Invalid request body or form data", http.StatusBadRequest)
 			a.Logger.Errorf("Error decoding /api/kobo/download request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
@@ -373,6 +376,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reqURLStr = strings.ReplaceAll(reqURLStr, ";", "&")
 	parsedURL, err := url.Parse(reqURLStr)
 	if err != nil {
 		http.Error(w, "Invalid 'url' parameter", http.StatusBadRequest)
@@ -723,11 +727,9 @@ func (a *App) HandleDumpAndForward(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		a.Logger.Debugf("Error reading request body: %v", err)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
 	a.Logger.Debugf("Body: %s", string(bodyBytes))
 
 	target, err := url.Parse("https://storeapi.kobo.com")
@@ -735,7 +737,70 @@ func (a *App) HandleDumpAndForward(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Errorf("Error parsing target URL: %v", err)
 		return
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ServeHTTP(w, r)
-}
 
+	outPath := strings.TrimPrefix(r.URL.Path, "/instapaper-proxy/storeapi")
+	outURL := *target
+	outURL.Path = outPath
+	outURL.RawQuery = r.URL.RawQuery
+
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		return
+	}
+	for key, vals := range r.Header {
+		for _, val := range vals {
+			outReq.Header.Add(key, val)
+		}
+	}
+	outReq.Header.Set("Host", "storeapi.kobo.com")
+	outReq.Host = "storeapi.kobo.com"
+
+	client := &http.Client{}
+	resp, err := client.Do(outReq)
+	if err != nil {
+		http.Error(w, "Failed to forward request", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Failed to read response", http.StatusInternalServerError)
+		return
+	}
+
+	if strings.Contains(outPath, "initialization") {
+		proxyBase := "https://" + r.Host + "/instapaper-proxy/instapaper"
+		var decompressed []byte
+		if resp.Header.Get("Content-Encoding") == "gzip" {
+			gr, err := gzip.NewReader(bytes.NewReader(respBody))
+			if err == nil {
+				decompressed, err = io.ReadAll(gr)
+				gr.Close()
+			}
+			if err == nil {
+				rewritten := strings.ReplaceAll(string(decompressed), "https://www.instapaper.com", proxyBase)
+				a.Logger.Debugf("Rewrote initialization response: %s", rewritten)
+				var buf bytes.Buffer
+				gw := gzip.NewWriter(&buf)
+				gw.Write([]byte(rewritten))
+				gw.Close()
+				respBody = buf.Bytes()
+			}
+		} else {
+			rewritten := strings.ReplaceAll(string(respBody), "https://www.instapaper.com", proxyBase)
+			a.Logger.Debugf("Rewrote initialization response: %s", rewritten)
+			respBody = []byte(rewritten)
+		}
+	}
+
+	for key, vals := range resp.Header {
+		for _, val := range vals {
+			w.Header().Add(key, val)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
+}
