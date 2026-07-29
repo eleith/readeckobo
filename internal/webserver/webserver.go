@@ -21,6 +21,10 @@ func ListenAndServe(port int, application *app.App, logger *logger.Logger) {
 	mux.HandleFunc("/api/kobo/send", application.HandleKoboSend)
 	mux.HandleFunc("/api/convert-image", application.HandleConvertImage)
 	mux.HandleFunc("/instapaper-proxy/storeapi/v1/initialization", application.HandleDumpAndForward)
+	mux.HandleFunc("/instapaper-proxy/storeapi/", application.HandleDumpAndForward)
+	mux.HandleFunc("/instapaper-proxy/instapaper/api/kobo/get", application.HandleKoboGet)
+	mux.HandleFunc("/instapaper-proxy/instapaper/api/kobo/download", application.HandleKoboDownload)
+	mux.HandleFunc("/instapaper-proxy/instapaper/api/kobo/send", application.HandleKoboSend)
 
 	// Catch-all for unimplemented routes
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
