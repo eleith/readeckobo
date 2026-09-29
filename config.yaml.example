@@ -3,7 +3,7 @@ server:
 log_level: info
 readeck:
   host: "https://your-readeck-instance.com"
-# Integration in progress: optional proxy and sync behavior is not wired up yet.
+# Integration in progress: book sync and archived-article behavior are not wired up yet.
 # Optional: public HTTPS origin used in Go-proxied Kobo initialization responses.
 # public_url: "https://readeckobo.example.com"
 users:

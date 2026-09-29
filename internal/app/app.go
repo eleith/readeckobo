@@ -12,7 +12,6 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
@@ -33,6 +32,7 @@ type App struct {
 	Logger            *logger.Logger
 	ImageHTTPClient   *http.Client
 	ReadeckHTTPClient *http.Client
+	ProxyTransport    http.RoundTripper
 }
 
 func WithImageHTTPClient(client *http.Client) Option {
@@ -66,6 +66,12 @@ func WithLogger(logger *logger.Logger) Option {
 func WithReadeckHTTPClient(client *http.Client) Option {
 	return func(a *App) {
 		a.ReadeckHTTPClient = client
+	}
+}
+
+func WithProxyTransport(transport http.RoundTripper) Option {
+	return func(a *App) {
+		a.ProxyTransport = transport
 	}
 }
 
@@ -200,12 +206,12 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		a.Logger.Errorf("Error reading /api/kobo/get request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error reading /api/kobo/get request body: %v", err)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/get:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/get: Method=%s", r.Method)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -215,21 +221,21 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 	var req models.KoboGetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		a.Logger.Errorf("Error decoding /api/kobo/get request: %v, body: %s, URL: %s, Params: %v", err, string(bodyBytes), r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error decoding /api/kobo/get request: %v", err)
 		return
 	}
 
 	readeckToken, err := a.getReadeckToken(req.AccessToken)
 	if err != nil {
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		a.Logger.Errorf("Error authenticating token for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error authenticating token for /api/kobo/get: %v", err)
 		return
 	}
 
 	readeckClient, err := a.newReadeckClient(readeckToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/get: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/get: %v", err)
 		return
 	}
 
@@ -325,12 +331,12 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		a.Logger.Errorf("Error reading /api/kobo/download request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error reading /api/kobo/download request body: %v", err)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/download:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/download: Method=%s", r.Method)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -341,7 +347,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "Invalid request body or form data", http.StatusBadRequest)
-			a.Logger.Errorf("Error decoding /api/kobo/download request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+			a.Logger.Errorf("Error decoding /api/kobo/download request: %v", err)
 			return
 		}
 		req.AccessToken = r.FormValue("access_token")
@@ -355,28 +361,28 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	readeckToken, err := a.getReadeckToken(req.AccessToken)
 	if err != nil {
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		a.Logger.Errorf("Error authenticating token for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error authenticating token for /api/kobo/download: %v", err)
 		return
 	}
 
 	readeckClient, err := a.newReadeckClient(readeckToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/download: %v", err)
 		return
 	}
 
 	reqURLStr := req.URL
 	if reqURLStr == "" {
 		http.Error(w, "Missing 'url' parameter", http.StatusBadRequest)
-		a.Logger.Errorf("Error: Missing 'url' parameter in /api/kobo/download request, URL: %s, Params: %v", r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Missing 'url' parameter in /api/kobo/download request")
 		return
 	}
 
 	parsedURL, err := url.Parse(reqURLStr)
 	if err != nil {
 		http.Error(w, "Invalid 'url' parameter", http.StatusBadRequest)
-		a.Logger.Errorf("Error: Invalid 'url' parameter in /api/kobo/download request: %v, url: %s, URL: %s, Params: %v", err, reqURLStr, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Invalid 'url' parameter in /api/kobo/download request: %T", err)
 		return
 	}
 
@@ -392,7 +398,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 			isArchived := false
 			bookmarks, tp, err := readeckClient.GetBookmarks(ctx, site, currentPage, &isArchived)
 			if err != nil {
-				a.Logger.Warnf("Error searching Readeck bookmarks for site %s, page %d in /api/kobo/download: %v, URL: %s, Params: %v", site, currentPage, err, r.URL.Path, r.URL.Query())
+				a.Logger.Warnf("Error searching Readeck bookmarks for site %s, page %d in /api/kobo/download: %v", site, currentPage, err)
 				break
 			}
 			totalPages = tp
@@ -401,7 +407,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 				if bookmarks[i].URL != "" {
 					match, err := compareURLs(bookmarks[i].URL, reqURLStr)
 					if err != nil {
-						a.Logger.Warnf("Error comparing URLs for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarks[i].ID, err, r.URL.Path, r.URL.Query())
+						a.Logger.Warnf("Error comparing URLs for bookmark %s in /api/kobo/download: %T", bookmarks[i].ID, err)
 						continue
 					}
 					if match {
@@ -428,14 +434,14 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	articleHTML, err := readeckClient.GetBookmarkArticle(ctx, bookmarkFound.ID)
 	if err != nil {
 		http.Error(w, "Failed to fetch article content", http.StatusInternalServerError)
-		a.Logger.Errorf("Error fetching article content for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error fetching article content for bookmark %s in /api/kobo/download: %v", bookmarkFound.ID, err)
 		return
 	}
 
 	doc, err := html.Parse(strings.NewReader(articleHTML))
 	if err != nil {
 		http.Error(w, "Failed to parse article HTML", http.StatusInternalServerError)
-		a.Logger.Errorf("Error parsing article HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error parsing article HTML for bookmark %s in /api/kobo/download: %v", bookmarkFound.ID, err)
 		return
 	}
 
@@ -474,7 +480,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		http.Error(w, "Failed to render modified HTML", http.StatusInternalServerError)
-		a.Logger.Errorf("Error rendering modified HTML for bookmark %s in /api/kobo/download: %v, URL: %s, Params: %v", bookmarkFound.ID, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error rendering modified HTML for bookmark %s in /api/kobo/download: %v", bookmarkFound.ID, err)
 		return
 	}
 
@@ -485,7 +491,7 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		a.Logger.Errorf("Error encoding response for /api/kobo/download: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error encoding response for /api/kobo/download: %v", err)
 	}
 }
 
@@ -518,12 +524,12 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		a.Logger.Errorf("Error reading /api/kobo/send request body: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error reading /api/kobo/send request body: %v", err)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/send:\nMethod: %s\nURL: %s\nHeaders: %v\nBody: %s", r.Method, r.URL, r.Header, string(bodyBytes))
+	a.Logger.Debugf("Incoming Kobo Request for /api/kobo/send: Method=%s", r.Method)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -533,21 +539,21 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 	var req models.KoboSendRequest
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		a.Logger.Errorf("Error decoding /api/kobo/send request: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error decoding /api/kobo/send request: %v", err)
 		return
 	}
 
 	readeckToken, err := a.getReadeckToken(req.AccessToken)
 	if err != nil {
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		a.Logger.Errorf("Error authenticating token for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error authenticating token for /api/kobo/send: %v", err)
 		return
 	}
 
 	readeckClient, err := a.newReadeckClient(readeckToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
-		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/send: %v", err)
 		return
 	}
 
@@ -592,7 +598,7 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
-			a.Logger.Warnf("Error processing action '%s' in /api/kobo/send: %v, URL: %s, Params: %v", action, err, r.URL.Path, r.URL.Query())
+			a.Logger.Warnf("Error processing action '%s' in /api/kobo/send: %v", action, err)
 			actionResults[i] = false
 			allSucceeded = false
 		} else {
@@ -607,7 +613,7 @@ func (a *App) HandleKoboSend(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		a.Logger.Errorf("Error encoding response for /api/kobo/send: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error encoding response for /api/kobo/send: %v", err)
 	}
 }
 
@@ -629,25 +635,25 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := client.Get(imageURL)
 	if err != nil {
-		a.Logger.Errorf("Failed to fetch image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Failed to fetch image in /api/convert-image: %T", err)
 		a.returnPlaceholderImage(w, r, "Image fetch failed")
 		return
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			a.Logger.Warnf("Error closing response body for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+			a.Logger.Warnf("Error closing response body in /api/convert-image: %v", err)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		a.Logger.Warnf("Failed to fetch image %s in /api/convert-image: status %d, URL: %s, Params: %v", imageURL, resp.StatusCode, r.URL.Path, r.URL.Query())
+		a.Logger.Warnf("Failed to fetch image in /api/convert-image: status %d", resp.StatusCode)
 		a.returnPlaceholderImage(w, r, "Image not found")
 		return
 	}
 
 	img, _, err := image.Decode(resp.Body)
 	if err != nil {
-		a.Logger.Warnf("Failed to decode image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.Logger.Warnf("Failed to decode image in /api/convert-image: %v", err)
 		a.returnPlaceholderImage(w, r, "Image decoding failed")
 		return
 	}
@@ -659,7 +665,7 @@ func (a *App) HandleConvertImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	if err := jpeg.Encode(w, rgbImg, &jpeg.Options{Quality: 85}); err != nil {
-		a.Logger.Errorf("Failed to encode JPEG for image %s in /api/convert-image: %v, URL: %s, Params: %v", imageURL, err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Failed to encode JPEG in /api/convert-image: %v", err)
 	}
 }
 
@@ -681,7 +687,7 @@ func (a *App) returnPlaceholderImage(w http.ResponseWriter, r *http.Request, mes
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-control", "public, max-age=300")
 	if err := jpeg.Encode(w, img, &jpeg.Options{Quality: 85}); err != nil {
-		a.Logger.Errorf("Error encoding placeholder image: %v, URL: %s, Params: %v", err, r.URL.Path, r.URL.Query())
+		a.Logger.Errorf("Error encoding placeholder image: %v", err)
 	}
 }
 
@@ -713,29 +719,3 @@ func (a *App) getReadeckToken(deviceToken string) (string, error) {
 func (a *App) newReadeckClient(readeckToken string) (*readeck.Client, error) {
 	return readeck.NewClient(a.Config.Readeck.Host, readeckToken, a.Logger, a.ReadeckHTTPClient)
 }
-
-func (a *App) HandleDumpAndForward(w http.ResponseWriter, r *http.Request) {
-	a.Logger.Debugf("Dumping request from %s", r.RemoteAddr)
-	a.Logger.Debugf("Method: %s", r.Method)
-	a.Logger.Debugf("URL: %s", r.URL.String())
-	a.Logger.Debugf("Headers: %v", r.Header)
-
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		a.Logger.Debugf("Error reading request body: %v", err)
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	a.Logger.Debugf("Body: %s", string(bodyBytes))
-
-	target, err := url.Parse("https://storeapi.kobo.com")
-	if err != nil {
-		a.Logger.Errorf("Error parsing target URL: %v", err)
-		return
-	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ServeHTTP(w, r)
-}
-

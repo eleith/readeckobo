@@ -2,7 +2,7 @@
 
 This document provides a detailed reference for all available configuration options in `config.yaml`.
 
-> Integration branch note: `public_url`, `book_sync_url`, and `remove_archived_from_kobo` are parsed and validated, but their proxy and sync behavior is not wired up yet. The descriptions below apply once the following feature commits land. The old `book_sync` switch is obsolete and ignored; it does not enable a route.
+> Integration branch note: `public_url` now applies to Go-proxied Kobo Store initialization. `book_sync_url` and `remove_archived_from_kobo` are parsed and validated, but book sync and archived-article behavior are not wired up yet. The old `book_sync` switch is obsolete and ignored; it does not enable a route.
 
 ## Top-Level Options
 
