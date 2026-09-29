@@ -173,6 +173,7 @@ func TestHandleKoboGet(t *testing.T) {
 		expectedStatus         int
 		expectedListSize       int
 		expectedTotal          int
+		expectedStatuses       map[string]string
 	}
 
 	testCases := []koboGetTestCase{
@@ -190,6 +191,22 @@ func TestHandleKoboGet(t *testing.T) {
 			expectedStatus:   http.StatusOK,
 			expectedListSize: 1, // Only the unread item
 			expectedTotal:    1,
+		},
+		{
+			name:    "full sync with opted-in user still excludes archived",
+			reqBody: &models.KoboGetRequest{Count: "10", AccessToken: "remove-archived-device"},
+			mockBookmarksSync: []readeck.BookmarkSync{
+				{ID: "1", Type: "update"},
+				{ID: "2", Type: "update"},
+			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{
+				"1": {ID: "1", Title: "Unread"},
+				"2": {ID: "2", Title: "Archived", IsArchived: true},
+			},
+			expectedStatus:   http.StatusOK,
+			expectedListSize: 1,
+			expectedTotal:    1,
+			expectedStatuses: map[string]string{"1": "0"},
 		},
 		{
 			name:    "full sync with favorited item",
@@ -236,6 +253,7 @@ func TestHandleKoboGet(t *testing.T) {
 			expectedStatus:      http.StatusOK,
 			expectedListSize:    1, // The deleted status update
 			expectedTotal:       0,
+			expectedStatuses:    map[string]string{"1": "2"},
 		},
 		{
 			name:    "incremental sync with newly archived",
@@ -249,6 +267,24 @@ func TestHandleKoboGet(t *testing.T) {
 			expectedStatus:   http.StatusOK,
 			expectedListSize: 1, // The full archived item
 			expectedTotal:    0,
+			expectedStatuses: map[string]string{"1": "1"},
+		},
+		{
+			name:    "incremental sync removes archived for opted-in user",
+			reqBody: &models.KoboGetRequest{Since: sinceValue, AccessToken: "remove-archived-device"},
+			mockBookmarksSync: []readeck.BookmarkSync{
+				{ID: "1", Type: "update"},
+				{ID: "2", Type: "update"},
+				{ID: "3", Type: "delete"},
+			},
+			mockBookmarkDetails: map[string]*readeck.Bookmark{
+				"1": {ID: "1", Title: "Archived", IsArchived: true},
+				"2": {ID: "2", Title: "Unread", IsArchived: false},
+			},
+			expectedStatus:   http.StatusOK,
+			expectedListSize: 3,
+			expectedTotal:    1,
+			expectedStatuses: map[string]string{"1": "2", "2": "0", "3": "2"},
 		},
 		{
 			name:                 "incremental sync with GetBookmarksSync error",
@@ -327,7 +363,10 @@ func TestHandleKoboGet(t *testing.T) {
 
 			app := NewApp(
 				WithConfig(&config.Config{
-					Users:   []config.User{{Token: mockDeviceToken, ReadeckAccessToken: mockPlaintextReadeckToken}},
+					Users: []config.User{
+						{Token: mockDeviceToken, ReadeckAccessToken: mockPlaintextReadeckToken},
+						{Token: "remove-archived-device", ReadeckAccessToken: mockPlaintextReadeckToken, RemoveArchivedFromKobo: true},
+					},
 					Readeck: config.ConfigReadeck{Host: mockServer.URL},
 				}),
 				WithLogger(testLogger),
@@ -359,22 +398,19 @@ func TestHandleKoboGet(t *testing.T) {
 					t.Errorf("expected total to be %d, got %d", tc.expectedTotal, resp.Total)
 				}
 
+				for id, wantStatus := range tc.expectedStatuses {
+					item, ok := resp.List[id]
+					if !ok || item.Status != wantStatus {
+						t.Errorf("item %s status = %q (found: %v), want %q", id, item.Status, ok, wantStatus)
+					}
+				}
+
 				// Specific checks for each test case
 				switch tc.name {
 				case "full sync with favorited item":
 					item := resp.List["1"]
 					if item.Favorite != "1" {
 						t.Errorf("expected favorited item 'favorite' status to be '1', got '%s'", item.Favorite)
-					}
-				case "incremental sync with deleted":
-					item := resp.List["1"]
-					if item.Status != "2" {
-						t.Errorf("expected deleted item status to be '2', got '%s'", item.Status)
-					}
-				case "incremental sync with newly archived":
-					item := resp.List["1"]
-					if item.Status != "1" {
-						t.Errorf("expected archived item status to be '1', got '%s'", item.Status)
 					}
 				case "full sync with image item":
 					item := resp.List["1"]
@@ -389,6 +425,7 @@ func TestHandleKoboGet(t *testing.T) {
 		})
 	}
 }
+
 // koboDownloadTestCase defines the structure for test cases in TestHandleKoboDownload.
 type koboDownloadTestCase struct {
 	name           string
@@ -842,5 +879,3 @@ func TestHandleConvertImage(t *testing.T) {
 		}
 	})
 }
-
-

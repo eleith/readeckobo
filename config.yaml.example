@@ -3,7 +3,6 @@ server:
 log_level: info
 readeck:
   host: "https://your-readeck-instance.com"
-# Integration in progress: archived-article behavior is not wired up yet.
 # Optional: public HTTPS origin used in Go-proxied Kobo initialization responses.
 # public_url: "https://readeckobo.example.com"
 users:
@@ -11,5 +10,6 @@ users:
     readeck_access_token: "your-plain-text-readeck-access-token"
     # Optional: overrides the Kobo Store fallback for this device.
     # book_sync_url: "https://books.example.com/api/kobo/device-token"
-    # Optional: false preserves the current archived-article sync behavior.
+    # Optional: send archived bookmarks with Kobo status "2" during incremental sync.
+    # Default false keeps status "1"; neither setting deletes Readeck bookmarks.
     # remove_archived_from_kobo: false

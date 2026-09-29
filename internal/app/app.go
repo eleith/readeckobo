@@ -142,7 +142,7 @@ func (a *App) handleFullSync(ctx context.Context, readeckClient *readeck.Client,
 	return resultList, totalNonArchivedBookmarks, nil
 }
 
-func (a *App) handleIncrementalSync(ctx context.Context, readeckClient *readeck.Client, since *time.Time) (map[string]models.KoboArticleItem, int, error) {
+func (a *App) handleIncrementalSync(ctx context.Context, readeckClient *readeck.Client, since *time.Time, user config.User) (map[string]models.KoboArticleItem, int, error) {
 	resultList := make(map[string]models.KoboArticleItem)
 
 	bsyncs, err := readeckClient.GetBookmarksSync(ctx, since)
@@ -192,6 +192,9 @@ func (a *App) handleIncrementalSync(ctx context.Context, readeckClient *readeck.
 
 		if bookmark.IsArchived {
 			entry.Status = "1"
+			if user.RemoveArchivedFromKobo {
+				entry.Status = "2"
+			}
 		} else {
 			entry.Status = "0"
 			totalNonArchivedBookmarks++
@@ -225,14 +228,14 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readeckToken, err := a.getReadeckToken(req.AccessToken)
+	user, err := a.getUser(req.AccessToken)
 	if err != nil {
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
 		a.Logger.Errorf("Error authenticating token for /api/kobo/get: %v", err)
 		return
 	}
 
-	readeckClient, err := a.newReadeckClient(readeckToken)
+	readeckClient, err := a.newReadeckClient(user.ReadeckAccessToken)
 	if err != nil {
 		http.Error(w, "Failed to initialize Readeck client", http.StatusInternalServerError)
 		a.Logger.Errorf("Error initializing Readeck client for /api/kobo/get: %v", err)
@@ -258,7 +261,7 @@ func (a *App) HandleKoboGet(w http.ResponseWriter, r *http.Request) {
 		resultList, total, err = a.handleFullSync(r.Context(), readeckClient, &req)
 	} else {
 		a.Logger.Debugf("Handling incremental sync.")
-		resultList, total, err = a.handleIncrementalSync(r.Context(), readeckClient, since)
+		resultList, total, err = a.handleIncrementalSync(r.Context(), readeckClient, since, user)
 	}
 
 	if err != nil {
@@ -707,13 +710,21 @@ func compareURLs(url1, url2 string) (bool, error) {
 	return u1.Scheme == u2.Scheme && u1.Host == u2.Host && u1.Path == u2.Path, nil
 }
 
-func (a *App) getReadeckToken(deviceToken string) (string, error) {
+func (a *App) getUser(deviceToken string) (config.User, error) {
 	for _, user := range a.Config.Users {
 		if user.Token == deviceToken {
-			return user.ReadeckAccessToken, nil
+			return user, nil
 		}
 	}
-	return "", fmt.Errorf("unauthorized device token")
+	return config.User{}, fmt.Errorf("unauthorized device token")
+}
+
+func (a *App) getReadeckToken(deviceToken string) (string, error) {
+	user, err := a.getUser(deviceToken)
+	if err != nil {
+		return "", err
+	}
+	return user.ReadeckAccessToken, nil
 }
 
 func (a *App) newReadeckClient(readeckToken string) (*readeck.Client, error) {
