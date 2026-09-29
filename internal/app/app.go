@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
@@ -11,6 +12,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -348,17 +350,18 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 
 	var req models.KoboDownloadRequest
 	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&req); err != nil {
-		if err := r.ParseForm(); err != nil {
+		form, err := downloadFormValues(r, bodyBytes)
+		if err != nil {
 			http.Error(w, "Invalid request body or form data", http.StatusBadRequest)
 			a.Logger.Errorf("Error decoding /api/kobo/download request: %v", err)
 			return
 		}
-		req.AccessToken = r.FormValue("access_token")
-		req.ConsumerKey = r.FormValue("consumer_key")
-		req.Images, _ = strconv.Atoi(r.FormValue("images"))
-		req.Refresh, _ = strconv.Atoi(r.FormValue("refresh"))
-		req.Output = r.FormValue("output")
-		req.URL = r.FormValue("url")
+		req.AccessToken = form.Get("access_token")
+		req.ConsumerKey = form.Get("consumer_key")
+		req.Images, _ = strconv.Atoi(form.Get("images"))
+		req.Refresh, _ = strconv.Atoi(form.Get("refresh"))
+		req.Output = form.Get("output")
+		req.URL = form.Get("url")
 	}
 
 	readeckToken, err := a.getReadeckToken(req.AccessToken)
@@ -496,6 +499,43 @@ func (a *App) HandleKoboDownload(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		a.Logger.Errorf("Error encoding response for /api/kobo/download: %v", err)
 	}
+}
+
+func downloadFormValues(r *http.Request, body []byte) (url.Values, error) {
+	if err := r.ParseForm(); err != nil {
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if mediaType != "application/x-www-form-urlencoded" || len(body) > 10<<20 {
+			return nil, err
+		}
+
+		// Kobo sends a raw ; inside the URL value. Escape only that form field,
+		// then let Go validate and decode the complete form as usual.
+		fields := strings.Split(string(body), "&")
+		urlFields := 0
+		repaired := false
+		for i, field := range fields {
+			if !strings.HasPrefix(field, "url=") {
+				continue
+			}
+			urlFields++
+			if strings.Contains(field, ";") {
+				fields[i] = strings.ReplaceAll(field, ";", "%3B")
+				repaired = true
+			}
+		}
+		if urlFields != 1 || !repaired {
+			return nil, err
+		}
+		form, err := url.ParseQuery(strings.Join(fields, "&"))
+		if err != nil {
+			return nil, err
+		}
+		if len(form["url"]) != 1 {
+			return nil, errors.New("duplicate URL form field")
+		}
+		return form, nil
+	}
+	return r.Form, nil
 }
 
 func getSitesToTry(host string) []string {

@@ -452,6 +452,19 @@ func TestHandleKoboDownload(t *testing.T) {
 			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
 		},
 		{
+			name: "successful download (JSON URL with semicolon)",
+			reqBody: models.KoboDownloadRequest{
+				AccessToken: mockDeviceToken,
+				URL:         "http://example.com/article;edition=2?page=1",
+			},
+			contentType:    "application/json",
+			expectedStatus: http.StatusOK,
+			mockBookmarks: []readeck.Bookmark{
+				{ID: "1", Title: "Test Article", URL: "http://example.com/article;edition=2?page=1"},
+			},
+			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
+		},
+		{
 			name: "successful download (Form)",
 			reqBody: url.Values{
 				"access_token": {mockDeviceToken},
@@ -465,6 +478,49 @@ func TestHandleKoboDownload(t *testing.T) {
 			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
 		},
 		{
+			name: "successful download (encoded semicolon in form URL path)",
+			reqBody: url.Values{
+				"access_token": {mockDeviceToken},
+				"url":          {"http://example.com/article;edition=2?page=1"},
+			},
+			contentType:    "application/x-www-form-urlencoded",
+			expectedStatus: http.StatusOK,
+			mockBookmarks: []readeck.Bookmark{
+				{ID: "1", Title: "Test Article", URL: "http://example.com/article;edition=2?page=1"},
+			},
+			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
+		},
+		{
+			name:           "successful download (raw semicolon in form URL path)",
+			reqBody:        "access_token=" + mockDeviceToken + "&url=http%3A%2F%2Fexample.com%2Farticle;edition=2%3Fpage%3D1",
+			contentType:    "application/x-www-form-urlencoded",
+			expectedStatus: http.StatusOK,
+			mockBookmarks: []readeck.Bookmark{
+				{ID: "1", Title: "Test Article", URL: "http://example.com/article;edition=2?page=1"},
+			},
+			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
+		},
+		{
+			name:           "successful download (raw semicolon in form URL query)",
+			reqBody:        "access_token=" + mockDeviceToken + "&url=http%3A%2F%2Fexample.com%2Farticle1%3Futm_source%3Dmail;utm_medium%3Dreader",
+			contentType:    "application/x-www-form-urlencoded",
+			expectedStatus: http.StatusOK,
+			mockBookmarks: []readeck.Bookmark{
+				{ID: "1", Title: "Test Article", URL: "http://example.com/article1?utm_source=mail;utm_medium=reader"},
+			},
+			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
+		},
+		{
+			name:           "successful download (captured Kobo form shape)",
+			reqBody:        "images=0&consumer_key=fake&access_token=" + mockDeviceToken + "&refresh=0&output=json&url=https://example.com/article?kobo_probe%3D1;part%3D2",
+			contentType:    "application/x-www-form-urlencoded",
+			expectedStatus: http.StatusOK,
+			mockBookmarks: []readeck.Bookmark{
+				{ID: "1", Title: "Test Article", URL: "https://example.com/article?kobo_probe=1;part=2"},
+			},
+			mockArticle: `<html><body><h1>Test Article</h1><img src="http://example.com/image.png"></body></html>`,
+		},
+		{
 			name: "missing url",
 			reqBody: models.KoboDownloadRequest{
 				AccessToken: mockDeviceToken,
@@ -472,6 +528,12 @@ func TestHandleKoboDownload(t *testing.T) {
 			},
 			contentType:    "application/json",
 			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "missing access token in raw-semicolon form",
+			reqBody:        "url=https://example.com/article;kobo_probe%3D1",
+			contentType:    "application/x-www-form-urlencoded",
+			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			name: "invalid access token",
@@ -527,8 +589,14 @@ func TestHandleKoboDownload(t *testing.T) {
 				}
 				body = bytes.NewReader(jsonBody)
 			case "application/x-www-form-urlencoded":
-				formValues := tc.reqBody.(url.Values)
-				body = strings.NewReader(formValues.Encode())
+				switch form := tc.reqBody.(type) {
+				case url.Values:
+					body = strings.NewReader(form.Encode())
+				case string:
+					body = strings.NewReader(form)
+				default:
+					t.Fatalf("unexpected form body type %T", tc.reqBody)
+				}
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/api/kobo/download", body)
@@ -557,6 +625,69 @@ func TestHandleKoboDownload(t *testing.T) {
 				if !strings.Contains(article, "<!--IMG_0-->") {
 					t.Error("expected image to be replaced with comment")
 				}
+			}
+		})
+	}
+}
+
+func TestDownloadFormValuesWithSemicolons(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantURL string
+		wantError           bool
+	}{
+		{
+			name:    "normally encoded URL with semicolon",
+			body:    url.Values{"access_token": {"device"}, "url": {"https://example.com/article;edition=2?utm=a;b=c"}}.Encode(),
+			wantURL: "https://example.com/article;edition=2?utm=a;b=c",
+		},
+		{
+			name:    "raw semicolon in URL path",
+			body:    "access_token=device&url=https%3A%2F%2Fexample.com%2Farticle;edition=2%3Fpage%3D1&output=epub",
+			wantURL: "https://example.com/article;edition=2?page=1",
+		},
+		{
+			name:    "Kobo form encodes equals but leaves semicolon raw",
+			body:    "images=0&consumer_key=fake&access_token=device&refresh=0&output=json&url=https://example.com/article?kobo_probe%3D1;part%3D2",
+			wantURL: "https://example.com/article?kobo_probe=1;part=2",
+		},
+		{
+			name:    "raw semicolon in URL query",
+			body:    "url=https%3A%2F%2Fexample.com%2Farticle%3Futm_source%3Dmail;utm_medium%3Dreader%26page%3D2&access_token=device",
+			wantURL: "https://example.com/article?utm_source=mail;utm_medium=reader&page=2",
+		},
+		{
+			name:      "semicolon outside URL field",
+			body:      "access_token=device;consumer_key=other&url=https%3A%2F%2Fexample.com%2Farticle;edition=2",
+			wantError: true,
+		},
+		{
+			name:      "duplicate URL field",
+			body:      "access_token=device&url=https%3A%2F%2Fexample.com%2Fa;edition=2&url=https%3A%2F%2Fexample.com%2Fb",
+			wantError: true,
+		},
+		{
+			name:      "invalid form without raw semicolon stays invalid",
+			body:      "access_token=device&url=https%3A%2F%2Fexample.com%2Fa&output=%zz",
+			wantError: true,
+		},
+		{
+			name:      "invalid percent escape",
+			body:      "access_token=device&url=https%3A%2F%2Fexample.com%2Fa;edition=2&output=%zz",
+			wantError: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/kobo/download", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			form, err := downloadFormValues(req, []byte(tt.body))
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("expected a form parsing error, got %v", form)
+				}
+				return
+			}
+			if err != nil || form.Get("url") != tt.wantURL || form.Get("access_token") != "device" {
+				t.Errorf("URL = %q, token = %q, err = %v; want URL %q and token device", form.Get("url"), form.Get("access_token"), err, tt.wantURL)
 			}
 		})
 	}
