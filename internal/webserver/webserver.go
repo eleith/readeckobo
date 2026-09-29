@@ -31,6 +31,7 @@ func NewHandler(application *app.App, logger *logger.Logger) http.Handler {
 	storeProxy := http.StripPrefix("/instapaper-proxy/storeapi", http.HandlerFunc(application.HandleStoreProxy))
 	mux.Handle("/instapaper-proxy/storeapi/", storeProxy)
 	mux.Handle("/instapaper-proxy/storeapi", storeProxy)
+	mux.HandleFunc("/booksync/{deviceToken}/", application.HandleBookSync)
 
 	// Catch-all for unimplemented routes
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

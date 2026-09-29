@@ -20,18 +20,23 @@ const (
 	maxInitializationBody = 8 << 20
 )
 
-var storeTransport = func() *http.Transport {
+var koboTransport = func() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 20 * time.Second
 	return transport
 }()
 
 func (a *App) HandleStoreProxy(w http.ResponseWriter, r *http.Request) {
+	a.serveKoboProxy(w, r, &url.URL{Scheme: "https", Host: storeAPIHost})
+}
+
+// serveKoboProxy expects the public route prefix to have been removed from r.URL.
+func (a *App) serveKoboProxy(w http.ResponseWriter, r *http.Request, target *url.URL) {
 	path := r.URL.Path
 	if path == "" {
 		path = "/"
 	}
-	proxy := a.newStoreProxy(path)
+	proxy := a.newKoboProxy(target, path)
 	if path == "/v1/initialization" {
 		origin, err := a.publicOrigin(r)
 		if err != nil {
@@ -43,8 +48,7 @@ func (a *App) HandleStoreProxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-func (a *App) newStoreProxy(path string) *httputil.ReverseProxy {
-	target := &url.URL{Scheme: "https", Host: storeAPIHost}
+func (a *App) newKoboProxy(target *url.URL, path string) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -55,10 +59,10 @@ func (a *App) newStoreProxy(path string) *httputil.ReverseProxy {
 	if a.ProxyTransport != nil {
 		proxy.Transport = a.ProxyTransport
 	} else {
-		proxy.Transport = storeTransport
+		proxy.Transport = koboTransport
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		a.Logger.Errorf("Kobo Store proxy failed: %T", err)
+		a.Logger.Errorf("Kobo upstream proxy failed: %T", err)
 		http.Error(w, "Bad gateway", http.StatusBadGateway)
 	}
 	return proxy
