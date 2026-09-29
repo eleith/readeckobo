@@ -15,3 +15,7 @@
 # llm agents
 /.gemini/
 /.claude/
+
+# Local planning and sandbox configuration
+/PROJECT_NGINX.md
+/.nono.json
