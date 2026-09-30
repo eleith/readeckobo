@@ -250,7 +250,7 @@ func TestHandleStoreProxy(t *testing.T) {
 	t.Run("encodes rewritten URLs as valid JSON strings", func(t *testing.T) {
 		urlWithQuote := `https://reader.example.com/path?value="quoted"`
 		resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"instapaper":"https://www.instapaper.com"}`))}
-		if err := rewriteInitialization(resp, urlWithQuote); err != nil {
+		if err := rewriteInitialization(resp, urlWithQuote, nil); err != nil {
 			t.Fatal(err)
 		}
 		var decoded struct {

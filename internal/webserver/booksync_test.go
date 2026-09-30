@@ -3,6 +3,7 @@ package webserver
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -156,6 +157,104 @@ func TestBookSyncInitialization(t *testing.T) {
 			}
 			if err != nil || string(result) != `{"instapaper":"https://reader.example.com/instapaper-proxy/instapaper"}` {
 				t.Errorf("rewritten body = %q, err = %v", result, err)
+			}
+		})
+	}
+}
+
+func TestBookSyncInitializationRewritesImagesPerUser(t *testing.T) {
+	for _, tt := range []struct{ token, host, key string }{
+		{"alice", "books-alice:25600", "alice-key"},
+		{"bob", "books-bob:25600", "bob-key"},
+	} {
+		t.Run(tt.token, func(t *testing.T) {
+			upstream := "http://" + tt.host + "/kobo/" + tt.key
+			body := `{"Resources":{"instapaper_env_url":"https://www.instapaper.com/api/kobo",` +
+				`"image_host":"http://` + tt.host + `",` +
+				`"image_url_template":"` + upstream + `/v1/books/{ImageId}/thumbnail/{Width}/{Height}/false/image.jpg",` +
+				`"image_url_quality_template":"` + upstream + `/v1/books/{ImageId}/thumbnail/{Width}/{Height}/{Quality}/{IsGreyscale}/image.jpg",` +
+				`"other_resource":"https://cdn.kobo.com/book.jpg"}}`
+			application := app.NewApp(
+				app.WithConfig(&config.Config{PublicURL: "https://reader.example.com", Users: []config.User{
+					{Token: "alice", BookSyncURL: "http://books-alice:25600/kobo/alice-key"},
+					{Token: "bob", BookSyncURL: "http://books-bob:25600/kobo/bob-key"},
+				}}),
+				app.WithLogger(logger.New(logger.ERROR)),
+				app.WithProxyTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if req.URL.Host != tt.host || req.URL.Path != "/kobo/"+tt.key+"/v1/initialization" {
+						t.Errorf("upstream URL = %s, want %s/v1/initialization", req.URL, upstream)
+					}
+					if req.Header.Get("X-Forwarded-Host") != tt.host || req.Header.Get("X-Forwarded-Proto") != "http" {
+						t.Errorf("forwarded host/proto = %q/%q; want %s/http", req.Header.Get("X-Forwarded-Host"), req.Header.Get("X-Forwarded-Proto"), tt.host)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				})),
+			)
+			req := httptest.NewRequest(http.MethodGet, "/booksync/"+tt.token+"/v1/initialization", nil)
+			req.Header.Set("X-Forwarded-Host", "untrusted.example.com")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			req.Header.Set("X-Forwarded-Prefix", "/wrong")
+			rr := httptest.NewRecorder()
+			NewHandler(application, logger.New(logger.ERROR)).ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+			}
+			var result struct {
+				Resources map[string]string
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			wantPrefix := "https://reader.example.com/booksync/" + tt.token
+			for key, want := range map[string]string{
+				"instapaper_env_url":         "https://reader.example.com/instapaper-proxy/instapaper/api/kobo",
+				"image_host":                 "https://reader.example.com",
+				"image_url_template":         wantPrefix + "/v1/books/{ImageId}/thumbnail/{Width}/{Height}/false/image.jpg",
+				"image_url_quality_template": wantPrefix + "/v1/books/{ImageId}/thumbnail/{Width}/{Height}/{Quality}/{IsGreyscale}/image.jpg",
+				"other_resource":             "https://cdn.kobo.com/book.jpg",
+			} {
+				if got := result.Resources[key]; got != want {
+					t.Errorf("Resources[%s] = %q, want %q", key, got, want)
+				}
+			}
+			if strings.Contains(rr.Body.String(), tt.key) {
+				t.Error("book service key leaked into initialization response")
+			}
+		})
+	}
+}
+
+func TestBookSyncInitializationImageOriginCases(t *testing.T) {
+	for _, tt := range []struct {
+		name, host, qualityHost, imageHost string
+		wantStatus                         int
+	}{
+		{"default HTTPS port is omitted upstream", "books.example.com", "books.example.com", "https://books.example.com", http.StatusOK},
+		{"mismatched private template fails closed", "books.example.com", "other.example.com", "https://books.example.com", http.StatusBadGateway},
+		{"unrelated image host is preserved", "books.example.com", "books.example.com", "https://cdn.example.com", http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `{"Resources":{"instapaper_env_url":"https://www.instapaper.com/api/kobo",` +
+				`"image_host":"` + tt.imageHost + `",` +
+				`"image_url_template":"https://` + tt.host + `/kobo/private-key/v1/books/{ImageId}/thumbnail/{Width}/{Height}/false/image.jpg",` +
+				`"image_url_quality_template":"https://` + tt.qualityHost + `/kobo/private-key/v1/books/{ImageId}/thumbnail/{Width}/{Height}/{Quality}/{IsGreyscale}/image.jpg"}}`
+			application := app.NewApp(
+				app.WithConfig(&config.Config{PublicURL: "https://reader.example.com", Users: []config.User{{Token: "device", BookSyncURL: "https://books.example.com:443/kobo/private-key"}}}),
+				app.WithLogger(logger.New(logger.ERROR)),
+				app.WithProxyTransport(roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				})),
+			)
+			rr := httptest.NewRecorder()
+			NewHandler(application, logger.New(logger.ERROR)).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/booksync/device/v1/initialization", nil))
+			if rr.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d, body = %s", rr.Code, tt.wantStatus, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "private-key") {
+				t.Error("book service key leaked into initialization response")
+			}
+			if tt.imageHost == "https://cdn.example.com" && !strings.Contains(rr.Body.String(), `"image_host":"`+tt.imageHost+`"`) {
+				t.Error("unrelated image_host was changed")
 			}
 		})
 	}

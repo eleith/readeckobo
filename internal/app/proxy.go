@@ -27,23 +27,43 @@ var koboTransport = func() *http.Transport {
 }()
 
 func (a *App) HandleStoreProxy(w http.ResponseWriter, r *http.Request) {
-	a.serveKoboProxy(w, r, &url.URL{Scheme: "https", Host: storeAPIHost})
+	a.serveKoboProxy(w, r, &url.URL{Scheme: "https", Host: storeAPIHost}, "")
 }
 
 // serveKoboProxy expects the public route prefix to have been removed from r.URL.
-func (a *App) serveKoboProxy(w http.ResponseWriter, r *http.Request, target *url.URL) {
+func (a *App) serveKoboProxy(w http.ResponseWriter, r *http.Request, target *url.URL, deviceToken string) {
 	path := r.URL.Path
 	if path == "" {
 		path = "/"
 	}
 	proxy := a.newKoboProxy(target, path)
+	if deviceToken != "" {
+		originalDirector := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			originalDirector(req)
+			// Book services can build absolute URLs from forwarded headers.
+			// Use the upstream origin, not the public ingress host.
+			req.Header.Del("Forwarded")
+			req.Header.Del("X-Forwarded-Port")
+			req.Header.Del("X-Forwarded-Prefix")
+			req.Header.Set("X-Forwarded-Host", target.Host)
+			req.Header.Set("X-Forwarded-Proto", target.Scheme)
+		}
+	}
 	if path == "/v1/initialization" {
 		origin, err := a.publicOrigin(r)
 		if err != nil {
 			http.Error(w, "Invalid public origin", http.StatusBadGateway)
 			return
 		}
-		configureInitializationProxy(proxy, origin+"/instapaper-proxy/instapaper")
+		var rewriteBody func([]byte) ([]byte, error)
+		if deviceToken != "" && target.Path != "" {
+			publicRoute := origin + "/booksync/" + deviceToken
+			rewriteBody = func(body []byte) ([]byte, error) {
+				return rewriteBookImages(body, target, origin, publicRoute)
+			}
+		}
+		configureInitializationProxy(proxy, origin+"/instapaper-proxy/instapaper", rewriteBody)
 	}
 	proxy.ServeHTTP(w, r)
 }
@@ -68,7 +88,7 @@ func (a *App) newKoboProxy(target *url.URL, path string) *httputil.ReverseProxy 
 	return proxy
 }
 
-func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL string) {
+func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL string, rewriteBody func([]byte) ([]byte, error)) {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -86,7 +106,7 @@ func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL st
 		if resp.StatusCode != http.StatusOK {
 			return nil
 		}
-		return rewriteInitialization(resp, instapaperURL)
+		return rewriteInitialization(resp, instapaperURL, rewriteBody)
 	}
 }
 
@@ -116,7 +136,7 @@ func (a *App) publicOrigin(r *http.Request) (string, error) {
 	return scheme + "://" + host, nil
 }
 
-func rewriteInitialization(resp *http.Response, instapaperURL string) error {
+func rewriteInitialization(resp *http.Response, instapaperURL string, rewriteBody func([]byte) ([]byte, error)) error {
 	originalBody := resp.Body
 	defer func() { _ = originalBody.Close() }()
 
@@ -145,6 +165,12 @@ func rewriteInitialization(resp *http.Response, instapaperURL string) error {
 		return err
 	}
 	body = bytes.ReplaceAll(body, []byte("https://www.instapaper.com"), encodedURL[1:len(encodedURL)-1])
+	if rewriteBody != nil {
+		body, err = rewriteBody(body)
+		if err != nil {
+			return err
+		}
+	}
 	if compressed {
 		var buf bytes.Buffer
 		gw := gzip.NewWriter(&buf)
