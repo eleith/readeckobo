@@ -17,13 +17,34 @@ more.
 
 ## 🚀 Quick Start (for Users)
 
-Getting up and running is a breeze with Docker.
+### 1. Choose how to publish
 
-### 1. Configure `readeckobo`
+Choose a public HTTPS hostname (for example, `readeckobo.example.com`) and one
+deployment method:
 
-First, copy `config.yaml.example` to `config.yaml` and edit it to match your setup.
+* [Cloudflare Tunnel](docs/CLOUDFLARE.md): forward requests to `readeckobo`.
+* [Nginx](docs/NGINX.md): proxy Kobo Store and article requests.
 
-For a detailed explanation of all options and how to get your Readeck API token, see [docs/CONFIG.md](docs/CONFIG.md).
+Both use the same Kobo settings below.
+
+### 2. Generate a device token
+
+Copy `config.yaml.example` to `config.yaml`, then build the image. Find your
+Kobo's serial number under **Settings -> Device Information**. Replace
+`<YOUR_KOBO_SERIAL>` below with that number (without angle brackets):
+
+```sh
+docker-compose build
+docker-compose run --rm --entrypoint /app/bin/generate-encrypted-token.sh readeckobo <YOUR_KOBO_SERIAL>
+```
+
+This one-off container generates a **plain text token** for `config.yaml` and
+an **encrypted token** for the Kobo. The app is not running yet.
+
+### 3. Configure `readeckobo` and Kobo
+
+Edit `config.yaml` with your Readeck host and API token and the **plain text**
+device token from step 2:
 
 ```yaml
 server:
@@ -32,97 +53,48 @@ log_level: info
 readeck:
   host: "https://your-readeck-instance.com"
 users:
-  - token: "a-random-uuid-token-for-a-kobo"
+  - token: "<THE-PLAIN-TEXT-TOKEN-FROM-THE-SCRIPT>"
     readeck_access_token: "a-readeck-api-token"
 ```
 
-### 2. Run with Docker
+For other options, see [docs/CONFIG.md](docs/CONFIG.md). To sync ebooks too,
+see the [Kobo ebook sync guide](docs/KOBO_SYNC.md) for the per-device
+`api_endpoint` instead of the article-only setting below.
 
-Once your configuration is ready, fire it up!
+Mount your Kobo and edit `.kobo/Kobo/Kobo eReader.conf`, using the **encrypted**
+token from the script. Replace `readeckobo.example.com` with the hostname you
+chose in step 1:
+
+```ini
+[OneStoreServices]
+api_endpoint=https://readeckobo.example.com/instapaper-proxy/storeapi
+instapaper_env_url=https://readeckobo.example.com
+
+[Instapaper]
+AccessToken=@ByteArray(<THE-ENCRYPTED-TOKEN-FROM-THE-SCRIPT>)
+```
+
+### 4. Run the app
 
 ```sh
-docker-compose build
 docker-compose up -d
 ```
 
-The server will be available at `http://localhost:8080`.
-
-### 3. Generate a Device Token
-
-For each Kobo device, you will need a unique token. This process involves
-generating a token and then encrypting it for the Kobo device.
-
-First, find your Kobo's serial number, which is available under
-**Settings -> Device Information** on your e-reader.
-
-With `readeckobo` running, use this command to generate and encrypt the token,
-replacing `<YOUR_KOBO_SERIAL>` with your device's serial number:
-
-```sh
-docker-compose exec readeckobo bin/generate-encrypted-token.sh <YOUR_KOBO_SERIAL>
-```
-
-The script will output two important pieces of information:
-
-1. A **plain text UUID token** to be used in your `config.yaml`.
-2. An **encrypted token** to be used in your Kobo's configuration file.
-
-### 4. Configure Your `readeckobo` and Kobo Device
-
-Follow the output from the script to configure your services.
-
-1. **Update `config.yaml`**: Add the plain text UUID token to the `users`
-    section of your `config.yaml`.
-
-    ```yaml
-    users:
-      - token: "<THE-PLAIN-TEXT-UUID-FROM-THE-SCRIPT>"
-        readeck_access_token: "a-readeck-api-token"
-    ```
-
-2. **Update Your Kobo**: Mount your Kobo and find the
-    `.kobo/Kobo/Kobo eReader.conf` file. Add or update these settings using the
-    **encrypted** token from the script's output.
-
-    ```ini
-    [OneStoreServices]
-    api_endpoint=https://readeckobo.example.com/instapaper-proxy/storeapi
-    instapaper_env_url=https://readeckobo.example.com
-
-    [Instapaper]
-    AccessToken=@ByteArray(<THE-ENCRYPTED-TOKEN-FROM-THE-SCRIPT>)
-    ```
-
-Replace `https://readeckobo.example.com` with the full path to where you are deploying
-the readeckobo service to
-
-### 5. Set Up a Reverse Proxy
-
-`readeckobo` must be run behind a reverse proxy to handle HTTPS. It's crucial
-to proxy three specific location blocks, as shown in our `nginx.conf.snippet`
-example.
-
-Your Kobo device periodically re-syncs its configuration from Kobo's servers,
-which can overwrite your custom Instapaper endpoint. The proxy rules below
-ensure this connection is preserved.
-
-<!-- markdownlint-disable MD013 -->
-| Location Block                                  | Proxies To               | Purpose                                                                                             |
-| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| `/instapaper-proxy/instapaper/`                 | `readeckobo` application | Handles the main Instapaper API requests (sync, download, etc.) to your `readeckobo` instance.      |
-| `/instapaper-proxy/storeapi/`                   | `storeapi.kobo.com`      | Forwards general API requests to Kobo's servers.                                                    |
-| `/instapaper-proxy/storeapi/v1/initialization`  | `storeapi.kobo.com`      | Intercepts the Kobo configuration response to rewrite the Instapaper URL back to your proxy endpoint. |
-<!-- markdownlint-enable MD013 -->
-
-Without these rules, your Kobo will eventually lose its connection to `readeckobo`.
+The app is available locally at `http://localhost:8080`. Set up your chosen
+[Cloudflare Tunnel](docs/CLOUDFLARE.md) or [Nginx](docs/NGINX.md) deployment
+before or after starting the app; the public HTTPS address must work before
+Kobo syncs. If you later edit `config.yaml`, recreate the running Docker
+container so it reads the new file; the deployment guides show the command.
 
 ## 🔒 A Quick Word on Security
 
 A little security goes a long way.
 
-* **Use HTTPS:** deploy behind a reverse proxy that provides HTTPS
-* **Stay Local:** Keep it on your local private network
-* **Kobo Password:** prevent unauthorized mounting with a Kobo password
+* **Use HTTPS:** follow either deployment guide above, and keep the app's HTTP
+  port private.
+* **Protect tokens:** don't share config files or request URLs containing device
+  tokens. Browser login or bot challenges may prevent Kobo sync.
+* **Kobo Password:** prevent unauthorized mounting with a Kobo password.
 
 ## 🧑‍💻 For Developers
 

@@ -16,8 +16,7 @@ The project follows a standard Go project layout:
 - **`internal/models/`**: Shared data structures for Kobo and Readeck API payloads.
 
 ## Deployment & Infrastructure
-- **Proxy Interception**: The system relies on a reverse proxy (like Nginx) to intercept requests from the Kobo device intended for `www.instapaper.com` and redirect them to this service.
-- **Configuration**: See `nginx.conf.snippet` for the rewrite rules.
+- **Deployment**: Kobo requests can reach this app through Cloudflare Tunnel or Nginx. See `docs/CLOUDFLARE.md` and `docs/NGINX.md` for the routing and initialization rewrite examples.
 - **Docker**: The application is containerized (`Dockerfile`, `docker-compose.yml`).
 
 ## Development Guidelines for AI Agents
