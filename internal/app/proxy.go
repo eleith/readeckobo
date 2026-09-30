@@ -56,14 +56,7 @@ func (a *App) serveKoboProxy(w http.ResponseWriter, r *http.Request, target *url
 			http.Error(w, "Invalid public origin", http.StatusBadGateway)
 			return
 		}
-		var rewriteBody func([]byte) ([]byte, error)
-		if deviceToken != "" && target.Path != "" {
-			publicRoute := origin + "/booksync/" + deviceToken
-			rewriteBody = func(body []byte) ([]byte, error) {
-				return rewriteBookImages(body, target, origin, publicRoute)
-			}
-		}
-		configureInitializationProxy(proxy, origin+"/instapaper-proxy/instapaper", rewriteBody)
+		configureInitializationProxy(proxy, origin+"/instapaper-proxy/instapaper")
 	}
 	proxy.ServeHTTP(w, r)
 }
@@ -88,7 +81,7 @@ func (a *App) newKoboProxy(target *url.URL, path string) *httputil.ReverseProxy 
 	return proxy
 }
 
-func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL string, rewriteBody func([]byte) ([]byte, error)) {
+func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL string) {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -106,7 +99,7 @@ func configureInitializationProxy(proxy *httputil.ReverseProxy, instapaperURL st
 		if resp.StatusCode != http.StatusOK {
 			return nil
 		}
-		return rewriteInitialization(resp, instapaperURL, rewriteBody)
+		return rewriteInitialization(resp, instapaperURL)
 	}
 }
 
@@ -136,7 +129,7 @@ func (a *App) publicOrigin(r *http.Request) (string, error) {
 	return scheme + "://" + host, nil
 }
 
-func rewriteInitialization(resp *http.Response, instapaperURL string, rewriteBody func([]byte) ([]byte, error)) error {
+func rewriteInitialization(resp *http.Response, instapaperURL string) error {
 	originalBody := resp.Body
 	defer func() { _ = originalBody.Close() }()
 
@@ -165,12 +158,6 @@ func rewriteInitialization(resp *http.Response, instapaperURL string, rewriteBod
 		return err
 	}
 	body = bytes.ReplaceAll(body, []byte("https://www.instapaper.com"), encodedURL[1:len(encodedURL)-1])
-	if rewriteBody != nil {
-		body, err = rewriteBody(body)
-		if err != nil {
-			return err
-		}
-	}
 	if compressed {
 		var buf bytes.Buffer
 		gw := gzip.NewWriter(&buf)
