@@ -4,8 +4,9 @@ Use the [README quick start](../README.md) for `config.yaml` and the Kobo's Inst
 
 ## Publish the app
 
-Before starting `readeckobo`, add your public origin to `config.yaml` (alongside
-`server`, `readeck`, and `users`):
+For a simple Tunnel route, set `public_url` to your public HTTPS origin in
+`config.yaml`. This pins the rewritten Instapaper URL without relying on a
+forwarded host header the Tunnel may not overwrite:
 
 ```yaml
 public_url: "https://readeckobo.example.com"

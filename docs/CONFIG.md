@@ -13,7 +13,7 @@ Configuration options for `config.yaml`. For a starting file, see
 | `users` | A list of Kobo-to-Readeck user mappings. | List of Objects | - | **Yes** |
 | `public_url` | Public origin used for the rewritten Instapaper URL in Kobo initialization. | URL String | Request host/forwarding headers | No |
 
-Set `public_url` for Go-proxied initialization, especially with `/booksync/`. Use the public HTTPS origin only (no path, query, or credentials). Without it, readeckobo uses the request host and forwarding headers; this is safe only when a trusted ingress overwrites client-supplied forwarding headers. See the [Cloudflare Tunnel](CLOUDFLARE.md) and [Nginx](NGINX.md) guides; article-only Nginx users do not need it.
+Set `public_url` when your ingress cannot reliably supply the public HTTPS origin, cannot overwrite client-supplied forwarding headers, or you need one canonical hostname. Use the origin only (no path, query, or credentials). Otherwise, Go-proxied initialization uses `X-Forwarded-Host` (or the request `Host`) and `X-Forwarded-Proto` (or the connection scheme), **not** `readeck.host`. Keep the app behind a trusted ingress when relying on those headers. See [Cloudflare Tunnel](CLOUDFLARE.md) and [Nginx](NGINX.md).
 
 ## User Object
 
