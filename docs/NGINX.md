@@ -1,13 +1,14 @@
 # Nginx
 
-Use the [README quick start](../README.md) for `config.yaml` and the Kobo's
-Instapaper settings.
+Use the [README quick start](../README.md) for a basic `config.yaml` and the
+Kobo's Instapaper settings.
 
 ## Kobo article syncing
 
 Add these locations to the HTTPS `server` block for **readeckobo's public
 hostname** (the Instapaper article address, and the `api_endpoint` address when
 using ebook sync).
+
 The example assumes Nginx can reach `readeckobo` at `127.0.0.1:8080`; use your
 app's address if different.
 
@@ -66,9 +67,8 @@ private network if it runs elsewhere.
 
 For [Kobo ebook sync](KOBO_SYNC.md), add this location to readeckobo's public
 HTTPS `server` block. The `proxy_pass` forwards the full
-`/booksync/<device-token>/...` path to Go, which selects the user's ebook
-service. The ebook service publishes its own Kobo-reachable cover and download
-URLs:
+`/booksync/<device-token>/...` path, which selects the user's ebook
+service.
 
 ```nginx
 location /booksync/ {
