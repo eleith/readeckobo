@@ -9,11 +9,17 @@ when:
       include:
         - "**/*.go"
         - "**/*.gohtml"
+        - "go.mod"
+        - "go.sum"
+        - ".golangci.yml"
+        - "scripts/check-coverage.sh"
+        - "bin/generate-encrypted-token.sh"
         - ".woodpecker/build-docker.yml"
         - "Dockerfile"
       exclude:
         - "**/*.md"
       on_empty: true
+  - event: pull_request
   - event: tag
     ref: "refs/tags/v*.*.*"
 
@@ -50,6 +56,29 @@ steps:
     when:
       - event: tag
 
+  extract-pr-tag:
+    image: alpine:3.22
+    commands:
+      - |
+        branch_slug=$(printf '%s' "$CI_COMMIT_SOURCE_BRANCH" | sed 's/[^A-Za-z0-9_.-]/-/g' | cut -c1-96)
+        printf 'pr-%s-%s\n' "$CI_COMMIT_PULL_REQUEST" "$branch_slug" > .tags
+        cat .tags
+    when:
+      - event: pull_request
+
+  build-docker-pr:
+    image: woodpeckerci/plugin-docker-buildx:6.0.3
+    settings:
+      repo: git.eleith.com/eleith.private/readeckobo
+      username: eleith
+      dockerfile: Dockerfile
+      registry: https://git.eleith.com
+      password:
+        from_secret: gitea_docker_registry
+      tags_file: .tags
+    when:
+      - event: pull_request
+
   build-docker-main:
     image: woodpeckerci/plugin-docker-buildx:6.0.3
     settings:
@@ -79,8 +108,8 @@ steps:
       - event: tag
         ref: "refs/tags/v*.*.*"
 
-  notify-success:
-    image: deblan/woodpecker-email:3.2.0
+  notify:
+    image: deblan/woodpecker-email:3.3.0
     settings:
       dsn:
         from_secret: woodpecker_email_dsn
@@ -91,23 +120,8 @@ steps:
           from_secret: woodpecker_email_from_name
       recipients:
         from_secret: woodpecker_email_recipient
-      level: success
       recipients_only: true
     when:
-      - status: [success]
-  notify-failure:
-    image: deblan/woodpecker-email:3.2.0
-    settings:
-      dsn:
-        from_secret: woodpecker_email_dsn
-      from:
-        address:
-          from_secret: woodpecker_email_from_address
-        name:
-          from_secret: woodpecker_email_from_name
-      recipients:
-        from_secret: woodpecker_email_recipient
-      level: failure
-      recipients_only: true
-    when:
-      - status: [failure]
+      - event: push
+        branch: main
+        status: [failure, success]
