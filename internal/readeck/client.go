@@ -9,7 +9,6 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
-	"net/http/httputil" // Added import
 	"net/url"
 	"strconv"
 	"strings"
@@ -129,26 +128,12 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string, queryPar
 		req.Header.Set("Content-Type", "application/json") // Ensure Content-Type is set for requests with a body
 	}
 
-	// Log the outgoing request for debugging
-	dump, err := httputil.DumpRequestOut(req, true)
-	if err != nil {
-		c.Logger.Errorf("Failed to dump outgoing request: %v", err)
-	} else {
-		c.Logger.Debugf("Outgoing Readeck API Request:\n%s", dump)
-	}
-
+	start := time.Now()
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-
-	// Log the incoming response for debugging
-	// dumpResp, err := httputil.DumpResponse(resp, true)
-	// if err != nil {
-	// 	c.Logger.Errorf("Failed to dump incoming response: %v", err)
-	// } else {
-	// 	c.Logger.Debugf("Incoming Readeck API Response:\n%s", dumpResp)
-	// }
+	c.Logger.Debugf("Readeck %s %s: HTTP %d in %s", req.Method, req.URL.Path, resp.StatusCode, time.Since(start))
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		defer func() { _ = resp.Body.Close() }()

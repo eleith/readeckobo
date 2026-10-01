@@ -1,10 +1,14 @@
 package readeck
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,6 +225,54 @@ func TestCreateBookmark(t *testing.T) {
 	err := client.CreateBookmark(ctx, "http://example.com/new")
 	if err != nil {
 		t.Fatalf("CreateBookmark failed: %v", err)
+	}
+}
+
+func TestRawRequestDebugLogOmitsSecrets(t *testing.T) {
+	const token = "private-readeck-token"
+	const query = "private-query-value"
+	const body = "private-body-value"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+			t.Errorf("Authorization header = %q, want bearer token", got)
+		}
+		if got := r.URL.Query().Get("q"); got != query {
+			t.Errorf("query value = %q, want %q", got, query)
+		}
+		var data map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			t.Errorf("decode request body: %v", err)
+		} else if data["data"] != body {
+			t.Errorf("body data = %q, want %q", data["data"], body)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	var output bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previousOutput)
+
+	client, err := NewClient(server.URL, token, logger.New(logger.DEBUG), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.doRequestRaw(context.Background(), http.MethodPost, "/api/bookmarks/sync", url.Values{"q": {query}}, map[string]string{"data": body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	got := output.String()
+	if !strings.Contains(got, "Readeck POST /api/bookmarks/sync: HTTP 200 in ") {
+		t.Errorf("missing request summary in debug log: %q", got)
+	}
+	for _, secret := range []string{token, query, body, "Authorization"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("debug log contains private request data: %q", secret)
+		}
 	}
 }
 
